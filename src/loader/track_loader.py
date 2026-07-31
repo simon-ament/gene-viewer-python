@@ -2,6 +2,9 @@ from abc import ABC, abstractmethod
 
 from pybedtools import BedTool
 
+from helpers import _hash_file
+
+
 class TrackLoader(ABC):
     @abstractmethod
     def load_gene(self, gene_id: str):
@@ -15,9 +18,11 @@ class TrackLoader(ABC):
     def cache_id(self):
         pass
 
+
 class TrackLoaderBED(TrackLoader):
     def __init__(self, bed_file_path: str):
         self.bed_file_path = bed_file_path
+        self.cache_id_str = None
 
         # Load BED file
         self.features = BedTool(bed_file_path)
@@ -29,11 +34,17 @@ class TrackLoaderBED(TrackLoader):
         pass
 
     def cache_id(self):
-        pass
+        # only compute cache_id_str when requested and if not already set
+        if self.cache_id_str is None:
+            # combine file hash to create a unique cache_id
+            self.cache_id_str = f"{_hash_file(self.bed_file_path)}"
+        return self.cache_id_str
+
 
 class TrackLoaderGTF(TrackLoader):
     def __init__(self, gtf_file_path: str):
         self.gtf_file_path = gtf_file_path
+        self.cache_id_str = None
 
         # Load GTF file
         self.features = BedTool(gtf_file_path)
@@ -45,4 +56,8 @@ class TrackLoaderGTF(TrackLoader):
         pass
 
     def cache_id(self):
-        pass
+        # only compute cache_id_str when requested and if not already set
+        if self.cache_id_str is None:
+            # combine file hash to create a unique cache_id
+            self.cache_id_str = f"{_hash_file(self.gtf_file_path)}"
+        return self.cache_id_str
