@@ -1,3 +1,4 @@
+import shelve
 from abc import ABC, abstractmethod
 
 from pybedtools import BedTool
@@ -24,6 +25,11 @@ class TrackLoaderBED(TrackLoader):
         self.bed_file_path = bed_file_path
         self.cache_id_str = None
 
+        # create a persistent index for BED features and keep it open for later access
+        self.features_index = shelve.open(
+            f"{bed_file_path}.index", flag="c", writeback=True
+        )
+
         # Load BED file
         self.features = BedTool(bed_file_path)
 
@@ -45,6 +51,11 @@ class TrackLoaderGTF(TrackLoader):
     def __init__(self, gtf_file_path: str):
         self.gtf_file_path = gtf_file_path
         self.cache_id_str = None
+
+        # create a persistent index for GTF features and keep it open for later access
+        self.features_index = shelve.open(
+            f"{gtf_file_path}.index", flag="c", writeback=True
+        )
 
         # Load GTF file
         self.features = BedTool(gtf_file_path)

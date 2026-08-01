@@ -11,17 +11,32 @@ from helpers import _hash_file
 
 
 class SequencesLoader(ABC):
-    @abstractmethod
-    def load_gene(self, gene_id: str):
-        pass
-
-    @abstractmethod
-    def gene_list(self):
-        pass
+    def __init__(self):
+        self.files_loaded = False
 
     @abstractmethod
     def cache_id(self):
+        # may be executed before files are loaded
         pass
+
+    def load_files(self):
+        pass
+
+    def load_gene(self):
+        if not self.files_loaded:
+            self.load_files()
+            self.files_loaded = True
+
+    def gene_list(self):
+        if not self.files_loaded:
+            self.load_files()
+            self.files_loaded = True
+
+    def delete(self):
+        pass
+
+    def __del__(self):
+        self.delete()
 
     # TODO: add cleanup and loading (delayed init) method
 
@@ -38,6 +53,7 @@ class SequencesLoaderFastaGTF(SequencesLoader):
     def __init__(
         self, fasta_file_path: str, gtf_file_path: str, region_types: list | None = None
     ):
+        super().__init__()
         self.fasta_file_path = fasta_file_path
         self.gtf_file_path = gtf_file_path
         self.region_types = region_types or []
@@ -45,14 +61,26 @@ class SequencesLoaderFastaGTF(SequencesLoader):
 
         self.records_index = SeqIO.index(fasta_file_path, "fasta")
         self.gene_features_map = defaultdict(list)  # {gene_id: [int]}
+        self.features_index = None  # will be initialized in load_files()
+        self.features = None  # will be initialized in load_files()
 
+    def cache_id(self):
+        print("cache_id called")
+        # only compute cache_id_str when requested and if not already set
+        if self.cache_id_str is None:
+            # combine file hash and region_types to create a unique cache_id
+            self.cache_id_str = f"{_hash_file(self.fasta_file_path)}_{_hash_file(self.gtf_file_path)}_{'_'.join(self.region_types)}"
+        return self.cache_id_str
+
+    def load_files(self):
+        print("load_files called")
         # create a persistent index for GTF features and keep it open for later access
         self.features_index = shelve.open(
-            f"{gtf_file_path}.index", flag="c", writeback=True
+            f"{self.gtf_file_path}.index", flag="c", writeback=True
         )
 
         # Load GTF file and filter features based on region_types
-        self.features = BedTool(gtf_file_path)
+        self.features = BedTool(self.gtf_file_path)
         for feature_idx, feature in enumerate(self.features):
             if (
                 feature[2] in self.region_types or not self.region_types
@@ -66,19 +94,8 @@ class SequencesLoaderFastaGTF(SequencesLoader):
                         feature  # store the feature in the persistent index
                     )
 
-    def __del__(self):
-        if hasattr(self, "features_index") and not getattr(self.features_index, "closed", False):
-            self.features_index.close()
-
-    @staticmethod
-    def _get_feature_attribute(attributes: str, key: str):
-        pattern = rf'(?:^|;\s*){re.escape(key)}\s+"([^"]*)"'
-        match = re.search(pattern, attributes)
-        if match:
-            return match.group(1)
-        return None
-
     def load_gene(self, gene_id: str):
+        print(f"load_gene called for gene_id: {gene_id}")
         """Loads sequences associated with a specific gene ID from the Fasta file.
 
         Args:
@@ -88,6 +105,7 @@ class SequencesLoaderFastaGTF(SequencesLoader):
             list: A list sequence records (start, sequence) associated with the specified gene ID.
         """
 
+        super().load_gene()  # ensure files are loaded
         sequences = []
         for feature_idx in self.gene_features_map.get(gene_id, []):
             feature = self.features_index.get(
@@ -102,23 +120,32 @@ class SequencesLoaderFastaGTF(SequencesLoader):
                 sequence = str(
                     seq_record.seq[start - 1 : end]
                 )  # extract the sequence from the Fasta record (convert to zero-based indexing)
-                sequences.append((start, sequence))
+                sequences.append({"start": start, "sequence": sequence})
         return sequences
 
     def gene_list(self):
+        print("gene_list called")
         """Returns a list of gene IDs available in the GTF file.
 
         Returns:
             list: A list of gene IDs.
         """
+        super().gene_list()  # ensure files are loaded
         return list(self.gene_features_map.keys())
 
-    def cache_id(self):
-        # only compute cache_id_str when requested and if not already set
-        if self.cache_id_str is None:
-            # combine file hash and region_types to create a unique cache_id
-            self.cache_id_str = f"{_hash_file(self.fasta_file_path)}_{_hash_file(self.gtf_file_path)}_{'_'.join(self.region_types)}"
-        return self.cache_id_str
+    def delete(self):
+        if self.features_index and not getattr(
+            self.features_index, "closed", False
+        ):
+            self.features_index.close()
+
+    @staticmethod
+    def _get_feature_attribute(attributes: str, key: str):
+        pattern = rf'(?:^|;\s*){re.escape(key)}\s+"([^"]*)"'
+        match = re.search(pattern, attributes)
+        if match:
+            return match.group(1)
+        return None
 
 
 class SequencesLoaderODTFasta(SequencesLoader):
@@ -130,11 +157,25 @@ class SequencesLoaderODTFasta(SequencesLoader):
     """
 
     def __init__(self, odt_fasta_file_path: str, region_types: list | None = None):
+        super().__init__()
         self.odt_fasta_file_path = odt_fasta_file_path
         self.region_types = region_types or []
         self.cache_id_str = None
 
-        self.records_index = SeqIO.index(odt_fasta_file_path, "fasta")
+        self.records_index = None  # will be initialized in load_files()
+        self.gene_records_map = None  # will be initialized in load_files()
+
+    def cache_id(self):
+        # only compute cache_id_str when requested and if not already set
+        if self.cache_id_str is None:
+            # combine file hash and region_types to create a unique cache_id
+            self.cache_id_str = (
+                f"{_hash_file(self.odt_fasta_file_path)}_{'_'.join(self.region_types)}"
+            )
+        return self.cache_id_str
+
+    def load_files(self):
+        self.records_index = SeqIO.index(self.odt_fasta_file_path, "fasta")
         # create map of Gene IDs to their records to avoid loading all sequences into memory at once
         self.gene_records_map = defaultdict(
             list
@@ -165,6 +206,7 @@ class SequencesLoaderODTFasta(SequencesLoader):
         Returns:
             list: A list of sequence records (start, sequence) associated with the specified gene ID.
         """
+        super().load_gene()  # ensure files are loaded
         return [
             (record_info["start"], str(self.records_index[record_info["idx"]].seq))
             for record_info in self.gene_records_map.get(gene_id, [])
@@ -176,13 +218,5 @@ class SequencesLoaderODTFasta(SequencesLoader):
         Returns:
             list: A list of gene IDs.
         """
+        super().gene_list()  # ensure files are loaded
         return list(self.gene_records_map.keys())
-
-    def cache_id(self):
-        # only compute cache_id_str when requested and if not already set
-        if self.cache_id_str is None:
-            # combine file hash and region_types to create a unique cache_id
-            self.cache_id_str = (
-                f"{_hash_file(self.odt_fasta_file_path)}_{'_'.join(self.region_types)}"
-            )
-        return self.cache_id_str

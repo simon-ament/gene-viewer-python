@@ -31,17 +31,17 @@ class GeneViewerServer:
         # resolve references
         for key in ["regions", "sequences", "tracks"]:
             for item in gene_data[key]:
-                if isinstance(item, dict) and "ref" in item:
+                if isinstance(item, dict) and "_ref" in item:
                     ref_file_path = (
                         self.dir_path
                         / "visualizations"
                         / f"{key}"
-                        / f"{item['ref']}.json"
+                        / f"{item['_ref']}.json"
                     )
                     with open(ref_file_path, "r") as ref_f:
                         ref_data = json.load(ref_f)
                     item.update(ref_data)
-                    del item["ref"]
+                    del item["_ref"]
 
         if not gene_id:
             return {"gene_list": gene_list, "data": gene_data}

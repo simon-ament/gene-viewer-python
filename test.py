@@ -1,6 +1,6 @@
 from src.gene_viewer import GeneViewer
 
-viewer = GeneViewer("test_viewer-odt", "output", genes_from="all")
+viewer = GeneViewer("test_viewer-odt-2", "output", genes_from="all")
 viewer.add_sequences_FastaGTF(
     "data/GCF_009729015.1_ASM972901v1_genomic.fna",
     "data/GCF_009729015.1_ASM972901v1_genomic.gtf",

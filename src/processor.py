@@ -2,11 +2,6 @@ from abc import ABC, abstractmethod
 
 
 class Processor(ABC):
-    def __init__(
-        self,
-    ):
-        pass
-
     @property
     @abstractmethod
     def id(self):

@@ -1,3 +1,4 @@
+import shelve
 from abc import ABC, abstractmethod
 from collections import defaultdict
 
@@ -27,6 +28,11 @@ class RegionsLoaderGTF(RegionsLoader):
         self.gtf_file_path = gtf_file_path
         self.region_types = region_types or []
         self.cache_id_str = None
+
+        # create a persistent index for GTF features and keep it open for later access
+        self.features_index = shelve.open(
+            f"{gtf_file_path}.index", flag="c", writeback=True
+        )
 
         # Load GTF file and filter features based on region_types
         self.features = BedTool(gtf_file_path)
@@ -64,8 +70,8 @@ class RegionsLoaderODTFasta(RegionsLoader):
         # iterate through the ODTFasta file and parse the headers using FastaParser
         fasta_parser = FastaParser()
         for idx in self.records_index:
-            region_name, additional_info, _coordinates = fasta_parser.parse_fasta_header(
-                idx
+            region_name, additional_info, _coordinates = (
+                fasta_parser.parse_fasta_header(idx)
             )
             gene_id = region_name.lstrip(">")
             # only include sequences that match the specified region_types (if provided)
