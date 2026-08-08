@@ -1,4 +1,5 @@
 import hashlib
+import re
 
 
 def _hash_file(file_path: str, chunk_size: int = 8192) -> str:
@@ -9,3 +10,11 @@ def _hash_file(file_path: str, chunk_size: int = 8192) -> str:
         while chunk := f.read(chunk_size):
             sha256.update(chunk)
     return sha256.hexdigest()
+
+
+def _get_feature_attribute(attributes: str, key: str):
+    pattern = rf'(?:^|;\s*){re.escape(key)}\s+"([^"]*)"'
+    match = re.search(pattern, attributes)
+    if match:
+        return match.group(1)
+    return None

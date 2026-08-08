@@ -1,44 +1,16 @@
-import re
 import shelve
-from abc import ABC, abstractmethod
 from collections import defaultdict
 
 from Bio import SeqIO
 from oligo_designer_toolsuite.utils import FastaParser
 from pybedtools import BedTool
 
-from helpers import _hash_file
+from helpers import _get_feature_attribute, _hash_file
+from .loader import FileBasedLoader
 
 
-class SequencesLoader(ABC):
-    def __init__(self):
-        self.files_loaded = False
-
-    @abstractmethod
-    def cache_id(self):
-        # may be executed before files are loaded
-        pass
-
-    def load_files(self):
-        pass
-
-    def load_gene(self):
-        if not self.files_loaded:
-            self.load_files()
-            self.files_loaded = True
-
-    def gene_list(self):
-        if not self.files_loaded:
-            self.load_files()
-            self.files_loaded = True
-
-    def delete(self):
-        pass
-
-    def __del__(self):
-        self.delete()
-
-    # TODO: add cleanup and loading (delayed init) method
+class SequencesLoader(FileBasedLoader):
+    pass
 
 
 class SequencesLoaderFastaGTF(SequencesLoader):
@@ -59,13 +31,12 @@ class SequencesLoaderFastaGTF(SequencesLoader):
         self.region_types = region_types or []
         self.cache_id_str = None
 
-        self.records_index = SeqIO.index(fasta_file_path, "fasta")
+        self.records_index = None  # will be initialized in load_files()
         self.gene_features_map = defaultdict(list)  # {gene_id: [int]}
         self.features_index = None  # will be initialized in load_files()
         self.features = None  # will be initialized in load_files()
 
     def cache_id(self):
-        print("cache_id called")
         # only compute cache_id_str when requested and if not already set
         if self.cache_id_str is None:
             # combine file hash and region_types to create a unique cache_id
@@ -73,10 +44,12 @@ class SequencesLoaderFastaGTF(SequencesLoader):
         return self.cache_id_str
 
     def load_files(self):
-        print("load_files called")
+        self.records_index = shelve.open(f"{self.fasta_file_path}_sequencesFastaGTF.shelve", flag="c", writeback=True)
+        for record in SeqIO.parse(self.fasta_file_path, "fasta"):
+            self.records_index[record.id] = record.seq
         # create a persistent index for GTF features and keep it open for later access
         self.features_index = shelve.open(
-            f"{self.gtf_file_path}.index", flag="c", writeback=True
+            f"{self.gtf_file_path}_sequencesFastaGTF.shelve", flag="c", writeback=True
         )
 
         # Load GTF file and filter features based on region_types
@@ -85,17 +58,19 @@ class SequencesLoaderFastaGTF(SequencesLoader):
             if (
                 feature[2] in self.region_types or not self.region_types
             ):  # feature[2] is the feature type (e.g., "exon", "intron")
-                # .attrs fails parsing some GTF files, so we use a regex to extract the gene_id from the attributes string
+                gene_id = _get_feature_attribute(
+                    feature[8], "gene_id"
+                )  # .attrs fails parsing some GTF files
                 # gene_id = feature.attrs.get("gene_id")
-                gene_id = self._get_feature_attribute(feature[8], "gene_id")
                 if gene_id:
                     self.gene_features_map[gene_id].append(feature_idx)
-                    self.features_index[str(feature_idx)] = (
-                        feature  # store the feature in the persistent index
-                    )
+                    self.features_index[str(feature_idx)] = {
+                        "seq_id": feature[0],
+                        "start": feature.start,
+                        "end": feature.end,
+                    }
 
     def load_gene(self, gene_id: str):
-        print(f"load_gene called for gene_id: {gene_id}")
         """Loads sequences associated with a specific gene ID from the Fasta file.
 
         Args:
@@ -112,19 +87,36 @@ class SequencesLoaderFastaGTF(SequencesLoader):
                 str(feature_idx)
             )  # retrieve the feature from the persistent index
             seq_record = self.records_index.get(
-                feature[0]
-            )  # feature[0] is the sequence ID (e.g., chromosome or scaffold name)
+                feature["seq_id"]
+            )  # feature["seq_id"] is the sequence ID (e.g., chromosome or scaffold name)
             if seq_record:
-                start = int(feature.start)  # one-based start position
-                end = int(feature.end)  # one-based end position
+                start = int(feature["start"])  # one-based start position
+                end = int(feature["end"])  # one-based end position
                 sequence = str(
-                    seq_record.seq[start - 1 : end]
+                    seq_record[start - 1 : end]
                 )  # extract the sequence from the Fasta record (convert to zero-based indexing)
                 sequences.append({"start": start, "sequence": sequence})
-        return sequences
+
+        # deduplicate sequences by removing sequences fully contained within other sequences and merging overlapping sequences
+        sorted_sequences = sorted(sequences, key=lambda x: (x["start"], len(x["sequence"])))
+        deduplicated_sequences = []
+        last_end = -1
+        for seq in sorted_sequences:
+            seq_start = seq["start"]
+            seq_end = seq_start + len(seq["sequence"]) - 1
+            if seq_start > last_end:
+                deduplicated_sequences.append(seq)
+                last_end = seq_end
+            elif seq_end > last_end:
+                # merge overlapping sequences
+                merged_sequence = deduplicated_sequences[-1]["sequence"] + seq["sequence"][last_end - seq_start + 1 :]
+                deduplicated_sequences[-1]["sequence"] = merged_sequence
+                last_end = seq_end
+            # else: fully contained sequence, skip it
+        
+        return deduplicated_sequences
 
     def gene_list(self):
-        print("gene_list called")
         """Returns a list of gene IDs available in the GTF file.
 
         Returns:
@@ -134,18 +126,23 @@ class SequencesLoaderFastaGTF(SequencesLoader):
         return list(self.gene_features_map.keys())
 
     def delete(self):
-        if self.features_index and not getattr(
-            self.features_index, "closed", False
-        ):
-            self.features_index.close()
+        records_index = getattr(self, "records_index", None)
+        if records_index is not None:
+            try:
+                records_index.close()
+            except Exception:
+                pass
+            finally:
+                self.records_index = None
 
-    @staticmethod
-    def _get_feature_attribute(attributes: str, key: str):
-        pattern = rf'(?:^|;\s*){re.escape(key)}\s+"([^"]*)"'
-        match = re.search(pattern, attributes)
-        if match:
-            return match.group(1)
-        return None
+        features_index = getattr(self, "features_index", None)
+        if features_index is not None:
+            try:
+                features_index.close()
+            except Exception:
+                pass
+            finally:
+                self.features_index = None
 
 
 class SequencesLoaderODTFasta(SequencesLoader):
@@ -163,7 +160,10 @@ class SequencesLoaderODTFasta(SequencesLoader):
         self.cache_id_str = None
 
         self.records_index = None  # will be initialized in load_files()
-        self.gene_records_map = None  # will be initialized in load_files()
+        # create map of Gene IDs to their records to avoid loading all sequences into memory at once
+        self.gene_records_map = defaultdict(
+            list
+        )  # {gene_id: [{idx: str, start: int}, {idx: str, start: int}, ...]}
 
     def cache_id(self):
         # only compute cache_id_str when requested and if not already set
@@ -175,11 +175,9 @@ class SequencesLoaderODTFasta(SequencesLoader):
         return self.cache_id_str
 
     def load_files(self):
-        self.records_index = SeqIO.index(self.odt_fasta_file_path, "fasta")
-        # create map of Gene IDs to their records to avoid loading all sequences into memory at once
-        self.gene_records_map = defaultdict(
-            list
-        )  # {gene_id: [{idx: str, start: int}, {idx: str, start: int}, ...]}
+        self.records_index = shelve.open(f"{self.odt_fasta_file_path}_sequencesODT.shelve", flag="c", writeback=True)
+        for record in SeqIO.parse(self.odt_fasta_file_path, "fasta"):
+            self.records_index[record.id] = record
 
         # iterate through the ODTFasta file and parse the headers using FastaParser
         fasta_parser = FastaParser()
@@ -208,7 +206,10 @@ class SequencesLoaderODTFasta(SequencesLoader):
         """
         super().load_gene()  # ensure files are loaded
         return [
-            (record_info["start"], str(self.records_index[record_info["idx"]].seq))
+            {
+                "start": record_info["start"],
+                "sequence": str(self.records_index[record_info["idx"]].seq),
+            }
             for record_info in self.gene_records_map.get(gene_id, [])
         ]
 
@@ -220,3 +221,13 @@ class SequencesLoaderODTFasta(SequencesLoader):
         """
         super().gene_list()  # ensure files are loaded
         return list(self.gene_records_map.keys())
+
+    def delete(self):
+        records_index = getattr(self, "records_index", None)
+        if records_index is not None:
+            try:
+                records_index.close()
+            except Exception:
+                pass
+            finally:
+                self.records_index = None

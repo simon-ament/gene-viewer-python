@@ -1,20 +1,11 @@
 import hashlib
-from abc import ABC, abstractmethod
 from collections import defaultdict
 
+from .loader import Loader
 
-class ProbesLoader(ABC):
-    @abstractmethod
-    def load_gene(self, gene_id: str):
-        pass
 
-    @abstractmethod
-    def gene_list(self):
-        pass
-
-    @abstractmethod
-    def cache_id(self):
-        pass
+class ProbesLoader(Loader):
+    pass
 
 
 class ProbesLoaderManual(ProbesLoader):
