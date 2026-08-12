@@ -19,7 +19,7 @@ class RegionsLoader(Loader):
         self._gene_list = gene_list
 
     @abstractmethod
-    def gene_locations(self) -> dict[str, GeneLocation]:
+    def gene_locations(self) -> dict[str, list[GeneLocation]]:
         if not self._lazy_init_done:
             self._lazy_init()
             self._lazy_init_done = True
@@ -53,16 +53,18 @@ class RegionsLoaderGTF(RegionsLoader):
             type = feature[2]
             if self._region_types and type not in self._region_types:
                 continue
-            start = int(feature.start) - 1  # 0-based start position
-            end = int(feature.end) - 1  # 0-based end position
-            regions[_get_GTF_attribute(feature[8], "transcript_id")].append(
-                {
-                    "start": start,
-                    "end": end,
-                    "type": type,
-                    "strand": feature.strand,
-                }
-            )
+            start = int(feature.start)  # 1-based start position
+            end = int(feature.end)  # 1-based end position
+            exon_number = _get_GTF_attribute(feature[8], "exon_number")
+            region = {
+                "start": start,
+                "end": end,
+                "type": type,
+                "strand": feature.strand,
+            }
+            if exon_number is not None:
+                region["exon_number"] = int(exon_number)
+            regions[_get_GTF_attribute(feature[8], "transcript_id")].append(region)
         return regions
 
     @property
@@ -103,18 +105,18 @@ class RegionsLoaderODTFasta(RegionsLoader):
             _, additional_info, coordinates = self._fasta_parser.parse_fasta_header(
                 header
             )
-            # TODO: check if these entries are in fact lists
-            type = additional_info.get("type")
+            type = additional_info.get("regiontype", ["unknown"])[0]
             if self._region_types and type not in self._region_types:
                 continue
-            regions[additional_info.get("transcript_id")].append(
-                {
-                    "start": coordinates.get("start"),
-                    "end": coordinates.get("end"),
-                    "type": type,
-                    "strand": additional_info.get("strand"),
-                }
-            )
+            for transcript_id in additional_info.get("transcript_id", ["unknown"]):
+                regions[transcript_id].append(
+                    {
+                        "start": coordinates["start"][0],
+                        "end": coordinates["end"][0],
+                        "type": type,
+                        "strand": additional_info["strand"][0],
+                    }
+                )
         return regions
 
     @property

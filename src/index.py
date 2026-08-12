@@ -10,7 +10,7 @@ from src.types import GeneLocation
 
 
 class FileIndex(ABC):
-    def __init__(self, file_path, gene_locations: dict[str, GeneLocation]):
+    def __init__(self, file_path, gene_locations: dict[str, list[GeneLocation]]):
         self._file_path = file_path
         self._file = open(file_path, "r")
         self._index = None
@@ -68,7 +68,7 @@ class GeneAwareFileIndex(FileIndex):
 class FastaFileIndex(FileIndex):
     def _build_index(self):
         index = {}
-        position = 0
+        position = 0  # 0-based position of the first character in the file
         seq_len_counter = 0
         next_gene_index = 0
         for line in self._file:
@@ -84,11 +84,12 @@ class FastaFileIndex(FileIndex):
                 next_gene = sorted_genes[next_gene_index] if sorted_genes else None
             else:
                 while (
-                    next_gene and seq_len_counter + len(line.strip()) > next_gene.start
+                    next_gene
+                    and seq_len_counter + len(line.strip()) > next_gene.start - 1
                 ):
                     index[next_gene.id] = (
-                        position + next_gene.start - seq_len_counter,
-                        next_gene.end - next_gene.start + 1,
+                        position + (next_gene.start - 1 - seq_len_counter),
+                        next_gene.end - next_gene.start,
                     )  # position and length
                     next_gene_index += 1
                     next_gene = (
@@ -106,9 +107,18 @@ class FastaFileIndex(FileIndex):
             raise KeyError(f"Key '{key}' not found in index.")
         (position, length) = self._index[key]
         self._file.seek(position)
-        # TODO: check if length is correct
-        sequence = self._file.read(length).replace("\n", "")
-        return sequence
+        seq = ""
+        # read the sequence line by line and ignore any newline characters
+        while len(seq) < length:
+            line = self._file.readline()
+            if not line or line.startswith(">"):
+                break
+            line = line.strip()
+            if len(seq) + len(line) > length:
+                seq += line[: length - len(seq)]
+            else:
+                seq += line.strip()
+        return seq
 
 
 # key: gene ID, return: list of features
@@ -255,15 +265,15 @@ class ODTFastaFileIndex(GeneAwareFileIndex):
                     index[gene_id].append(position)
                     # NOTE: ODT Fasta must include gene entries if used as sequence source
                     if (
-                        additional_info.get("regiontype") == "gene"
+                        additional_info.get("regiontype", ["unknown"])[0] == "gene"
                         and self._collect_gene_locations
                     ):
                         gene_location = GeneLocation(
                             id=gene_id,
-                            seq_id=coordinates.get("chromosome"),
-                            start=coordinates.get("start"),
-                            end=coordinates.get("end"),
-                            strand=additional_info.get("strand"),
+                            seq_id=coordinates["chromosome"][0],
+                            start=coordinates["start"][0],
+                            end=coordinates["end"][0],
+                            strand=additional_info["strand"][0],
                         )
                         if gene_location.seq_id not in self._gene_locations:
                             self._gene_locations[gene_location.seq_id] = []

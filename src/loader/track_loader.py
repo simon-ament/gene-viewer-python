@@ -10,7 +10,7 @@ class TrackLoader(Loader):
         super().__init__()
         self._gene_locations = None
 
-    def set_gene_locations(self, gene_locations: dict[str, GeneLocation]):
+    def set_gene_locations(self, gene_locations: dict[str, list[GeneLocation]]):
         self._gene_locations = gene_locations
 
 
@@ -18,8 +18,8 @@ class TrackLoaderBED(TrackLoader):
     def __init__(
         self,
         bed_file_path: str,
-        opacity_from_score: bool = False,
-        max_score: float = 1.0,
+        opacity_from_score: bool,
+        max_score: float,
     ):
         self._bed_file_path = bed_file_path
         self._bed_file_index = None  # will be initialized lazily
@@ -43,8 +43,8 @@ class TrackLoaderBED(TrackLoader):
     def load_gene(self, gene: GeneLocation):
         track = []
         for feature in self._bed_file_index.get(gene.id):
-            start = int(feature["start"])  # one-based start position
-            end = int(feature["end"])  # one-based end position
+            start = int(feature["start"]) + 1  # 0-based -> 1-based start position
+            end = int(feature["end"])  # 1-based end position
             track.append(
                 {
                     "start": start,
@@ -63,8 +63,8 @@ class TrackLoaderGTF(TrackLoader):
     def __init__(
         self,
         gtf_file_path: str,
-        opacity_from_score: bool = False,
-        max_score: float = 1.0,
+        opacity_from_score: bool,
+        max_score: float,
     ):
         self._gtf_file_path = gtf_file_path
         self._gtf_file_index = None  # will be initialized lazily
@@ -87,8 +87,8 @@ class TrackLoaderGTF(TrackLoader):
     def load_gene(self, gene: GeneLocation):
         track = []
         for feature in self._gtf_file_index.get(gene.id):
-            start = int(feature["start"])  # one-based start position
-            end = int(feature["end"])  # one-based end position
+            start = int(feature["start"])  # 1-based start position
+            end = int(feature["end"])  # 1-based end position
             track.append(
                 {
                     "start": start,

@@ -1,11 +1,13 @@
-from typing import Literal, NamedTuple
+from dataclasses import dataclass
+from typing import Literal
 
 
-class GeneLocation(NamedTuple):
+@dataclass(frozen=True)
+class GeneLocation:
     id: str
     seq_id: (
         str  # the sequence ID (e.g., chromosome or scaffold) where the gene is located
     )
-    start: int  # 0-based
-    end: int  # 0-based, inclusive
+    start: int  # 1-based
+    end: int  # 1-based, inclusive
     strand: Literal["+", "-"]  # the strand of the gene

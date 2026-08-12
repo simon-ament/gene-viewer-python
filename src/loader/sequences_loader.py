@@ -13,7 +13,7 @@ class SequencesLoader(Loader):
         super().__init__()
         self._gene_locations = None
 
-    def set_gene_locations(self, gene_locations: dict[str, GeneLocation]):
+    def set_gene_locations(self, gene_locations: dict[str, list[GeneLocation]]):
         self._gene_locations = gene_locations
 
 
@@ -44,7 +44,7 @@ class SequencesLoaderFasta(SequencesLoader):
         if gene.strand == "-":
             sequence = str(Seq(sequence).complement())
         if sequence:
-            start = gene.start
+            start = gene.start  # 1-based start position
             sequences.append({"start": start, "sequence": sequence})
 
         return deduplicate_sequences(sequences)
@@ -82,11 +82,11 @@ class SequencesLoaderODTFasta(SequencesLoader):
                 header
             )
             if gene.strand == "-":
-                sequence = str(Seq(sequence).complement())
-            if additional_info.get("regiontype") in self._region_types:
-                start = coordinates.get(
-                    "start"
-                )  # TODO: check indexing, should be 0-based
+                sequence = sequence[
+                    ::-1
+                ]  # is reverse complement already, just reverse it
+            if additional_info.get("regiontype", ["unknown"])[0] in self._region_types:
+                start = coordinates["start"][0]  # 1-based start position
                 sequences.append({"start": start, "sequence": sequence})
         return deduplicate_sequences(sequences)
 

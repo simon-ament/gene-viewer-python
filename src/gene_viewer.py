@@ -2,6 +2,7 @@ import copy
 import hashlib
 import json
 from collections import defaultdict
+from dataclasses import asdict
 from pathlib import Path
 from typing import Literal
 
@@ -96,7 +97,7 @@ class GeneViewer:
         bed_file_path: str,
         track_name: str,
         opacity_from_score: bool = False,
-        max_score: float = 1.0,
+        max_score: float = 1000.0,
     ):
         from src.loader.track_loader import TrackLoaderBED
 
@@ -109,7 +110,7 @@ class GeneViewer:
         gtf_file_path: str,
         track_name: str,
         opacity_from_score: bool = False,
-        max_score: float = 1.0,
+        max_score: float = 1000.0,
     ):
         from src.loader.track_loader import TrackLoaderGTF
 
@@ -203,11 +204,17 @@ class GeneViewer:
         if regions_cache_metadata_path.exists():
             with open(regions_cache_metadata_path, "r") as f:
                 regions_cache_metadata = json.load(f)
-            all_gene_locations: dict[str, GeneLocation] = regions_cache_metadata.get(
+            all_gene_locations_raw: dict[str, list[dict]] = regions_cache_metadata.get(
                 "gene_locations", {}
             )
+            all_gene_locations = {
+                seq_id: [
+                    GeneLocation(**gene_location) for gene_location in gene_locations
+                ]
+                for seq_id, gene_locations in all_gene_locations_raw.items()
+            }
         else:
-            all_gene_locations: dict[str, GeneLocation] = {
+            all_gene_locations: dict[str, list[GeneLocation]] = {
                 seq_id: [gene_location for gene_location in gene_locations]
                 for loader in self.regions_loaders
                 for seq_id, gene_locations in loader.gene_locations.items()
@@ -377,7 +384,10 @@ class GeneViewer:
             }
 
             if output_type == "regions":
-                metadata["gene_locations"] = all_gene_locations
+                metadata["gene_locations"] = {
+                    seq_id: [asdict(gene_location) for gene_location in gene_locations]
+                    for seq_id, gene_locations in all_gene_locations.items()
+                }
 
             self._write_json(metadata, metadata_path)
 
