@@ -12,7 +12,8 @@ def _hash_file(file_path: str, chunk_size: int = 8192) -> str:
     return sha256.hexdigest()
 
 
-def _get_feature_attribute(attributes: str, key: str):
+def _get_GTF_attribute(attributes: str, key: str):
+    # TODO: handle lists
     pattern = rf'(?:^|;\s*){re.escape(key)}\s+"([^"]*)"'
     match = re.search(pattern, attributes)
     if match:

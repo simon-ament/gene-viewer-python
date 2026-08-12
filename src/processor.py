@@ -41,19 +41,23 @@ class ProcessorExonJunctions(Processor):
     def process(self, data):
         # merge exon junctions with same exon_number into single exon
         for transcript_id, transcript_regions in data["regions"].items():
-            exon_junctions = list(filter(lambda x: x["type"] == "exon_junction", transcript_regions))
+            exon_junctions = list(
+                filter(lambda x: x["type"] == "exon_junction", transcript_regions)
+            )
 
             if not exon_junctions:
                 continue
 
-            sorted_exon_junctions = sorted(exon_junctions, key=lambda x: (x["start"]))
+            sorted_exon_junctions = sorted(exon_junctions, key=lambda x: x["start"])
 
             merged_exon_junctions = []
             last_exon_junction = sorted_exon_junctions[0]
             for exon_junction in sorted_exon_junctions[1:]:
                 if exon_junction["exon_number"] == last_exon_junction["exon_number"]:
                     # merge exon junctions with same exon_number
-                    last_exon_junction["end"] = max(last_exon_junction["end"], exon_junction["end"])
+                    last_exon_junction["end"] = max(
+                        last_exon_junction["end"], exon_junction["end"]
+                    )
                     last_exon_junction["type"] = "exon"
                 else:
                     merged_exon_junctions.append(last_exon_junction)
@@ -61,7 +65,10 @@ class ProcessorExonJunctions(Processor):
             merged_exon_junctions.append(last_exon_junction)
 
             # replace exon junctions with merged exon junctions
-            data["regions"][transcript_id] = list(filter(lambda x: x["type"] != "exon_junction", transcript_regions)) + merged_exon_junctions
+            data["regions"][transcript_id] = (
+                list(filter(lambda x: x["type"] != "exon_junction", transcript_regions))
+                + merged_exon_junctions
+            )
 
         return data
 
@@ -85,14 +92,16 @@ class ProcessorIntronGaps(Processor):
                 continue
 
             # Sort exons by start position
-            sorted_exons = sorted(exons, key=lambda x: (x["start"]))
+            sorted_exons = sorted(exons, key=lambda x: x["start"])
 
             introns = []
-            for i in range(len(exons) - 1):
-                intron_start = exons[i]["end"] + 1
-                intron_end = exons[i + 1]["start"] - 1
+            for i in range(len(sorted_exons) - 1):
+                intron_start = sorted_exons[i]["end"] + 1
+                intron_end = sorted_exons[i + 1]["start"] - 1
                 if intron_start <= intron_end:
-                    introns.append({"start": intron_start, "end": intron_end, "type": "intron"})
+                    introns.append(
+                        {"start": intron_start, "end": intron_end, "type": "intron"}
+                    )
 
             # Add introns to the transcript regions
             data["regions"][transcript_id].extend(introns)
@@ -114,11 +123,13 @@ class ProcessorExonSequencesOnly(Processor):
     def process(self, data):
         # restrict sequences to only exons
         exons = []
-        for transcript_id, transcript_data in data["regions"].items():
+        for transcript_data in data["regions"].values():
             exons.extend(list(filter(lambda x: x["type"] == "exon", transcript_data)))
 
-        sorted_exons = sorted(exons, key=lambda x: (x["start"]))
-        sorted_sequences = sorted(data["sequences"], key=lambda x: (x["start"], len(x["sequence"])))
+        sorted_exons = sorted(exons, key=lambda x: x["start"])
+        sorted_sequences = sorted(
+            data["sequences"], key=lambda x: (x["start"], len(x["sequence"]))
+        )
 
         # iterate through exons and sequences in parallel to restrict sequences to only exons
         exon_idx = 0
@@ -145,7 +156,9 @@ class ProcessorExonSequencesOnly(Processor):
                 restricted_sequence = sequence["sequence"][
                     restricted_start - seq_start : restricted_end - seq_start + 1
                 ]
-                data["sequences"].append({"start": restricted_start, "sequence": restricted_sequence})
+                data["sequences"].append(
+                    {"start": restricted_start, "sequence": restricted_sequence}
+                )
                 if restricted_end == seq_end:
                     # sequence is fully contained within the exon, move to the next sequence
                     sequence_idx += 1
@@ -154,3 +167,7 @@ class ProcessorExonSequencesOnly(Processor):
                     exon_idx += 1
 
         return data
+
+
+# Other ideas
+# - UTR and CDS to exons

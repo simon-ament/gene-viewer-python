@@ -15,10 +15,14 @@ class GeneViewerServer:
                 self.dir_path / "visualizations" / f"{viewer_id}" / "_metadata.json"
             )
             if not gene_list_file_path.exists():
-                return { "error": f"Gene list metadata file not found for viewer_id: {viewer_id}" }
+                return {
+                    "error": f"Gene list metadata file not found for viewer_id: {viewer_id}"
+                }
             with open(gene_list_file_path, "r") as f:
                 metadata = json.load(f)
-            resolved_gene_id = metadata["gene_list"][0] if metadata["gene_list"] else None
+            resolved_gene_id = (
+                metadata["gene_list"][0] if metadata["gene_list"] else None
+            )
 
         # load json file (self.dir_path / "visualizations" / f"{self.viewer_id}" / f"{gene_id}.json")
         gene_data_file_path = (
@@ -29,7 +33,9 @@ class GeneViewerServer:
         )
 
         if not gene_data_file_path.exists():
-            return { "error": f"Gene data file not found for gene_id: {resolved_gene_id}" }
+            return {
+                "error": f"Gene data file not found for gene_id: {resolved_gene_id}"
+            }
 
         with open(gene_data_file_path, "r") as f:
             gene_data = json.load(f)
@@ -46,6 +52,10 @@ class GeneViewerServer:
                     gene_data[data_type] = ref_data
 
         if not gene_id:
-            return { "geneList": metadata["gene_list"], "geneId": resolved_gene_id, "gene": gene_data }
+            return {
+                "geneList": metadata["gene_list"],
+                "geneId": resolved_gene_id,
+                "gene": gene_data,
+            }
 
-        return { "geneId": resolved_gene_id, "gene": gene_data}
+        return {"geneId": resolved_gene_id, "gene": gene_data}

@@ -1,39 +1,22 @@
 from abc import ABC, abstractmethod
 
+from src.types import GeneLocation
+
+
 class Loader(ABC):
-    @abstractmethod
-    def load_gene(self, gene_id: str):
-        pass
+    def __init__(self):
+        self._lazy_init_done = False
 
-    @abstractmethod
-    def gene_list(self):
-        pass
-
+    @property
     @abstractmethod
     def cache_id(self):
         pass
 
-class FileBasedLoader(Loader):
-    def __init__(self):
-        self.files_loaded = False
+    def _lazy_init(self):
+        """Perform any deferred initialization here. Cache_id should be available before this is called."""
 
     @abstractmethod
-    def load_files(self):
-        # cache_id() may be executed before files are loaded
-        pass
-
-    def load_gene(self):
-        if not self.files_loaded:
-            self.load_files()
-            self.files_loaded = True
-
-    def gene_list(self):
-        if not self.files_loaded:
-            self.load_files()
-            self.files_loaded = True
-
-    def delete(self):
-        pass
-
-    def __del__(self):
-        self.delete()
+    def load_gene(self, gene: GeneLocation):
+        if not self._lazy_init_done:
+            self._lazy_init()
+            self._lazy_init_done = True
