@@ -122,4 +122,4 @@ class RegionsLoaderODTFasta(RegionsLoader):
     @property
     def gene_locations(self):
         super().gene_locations()
-        return self._odt_fasta_file_index.gene_location_list
+        return self._odt_fasta_file_index.gene_locations

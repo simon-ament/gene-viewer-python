@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from io import StringIO  # for creating file-like objects from strings
 
 from oligo_designer_toolsuite.utils import FastaParser
@@ -42,7 +43,7 @@ class GeneAwareFileIndex(FileIndex):
         gene_list: list[str] | None = None,
         collect_gene_locations: bool = False,
     ):
-        super().__init__(file_path, gene_locations={})
+        super().__init__(file_path, gene_locations=defaultdict(list))
         self._gene_list = gene_list
         self._collect_gene_locations = collect_gene_locations
 
@@ -187,6 +188,8 @@ class GTFFileIndex(GeneAwareFileIndex):
     def _build_index(self):
         index = {}
         position = 0
+        inferred_gene_locations = {}
+        explicit_gene_locations = {}
         for line in self._file:
             if line.startswith(("#", "track", "browser")):
                 position += len(line)
@@ -201,29 +204,55 @@ class GTFFileIndex(GeneAwareFileIndex):
 
             for feature in bedtool:
                 gene_id = _get_GTF_attribute(feature[8], "gene_id")
-                if gene_id:
-                    if gene_id not in index:
-                        index[gene_id] = []
-                    index[gene_id].append(position)
-                    type = feature[2]
-                    if type == "gene" and self._collect_gene_locations:
-                        gene_location = GeneLocation(
-                            id=gene_id,
-                            seq_id=feature.chrom,
-                            start=feature.start,
-                            end=feature.end,
-                            strand=feature.strand,
-                        )
-                        if gene_location.seq_id not in self._gene_locations:
-                            self._gene_locations[gene_location.seq_id] = []
-                        self._gene_locations[gene_location.seq_id].append(gene_location)
+                if not gene_id:
+                    continue
+                if gene_id not in index:
+                    index[gene_id] = []
+                index[gene_id].append(position)
+
+                if not self._collect_gene_locations:
+                    continue
+
+                feature_type = feature[2]
+                start = int(feature.start)
+                end = int(feature.end)
+                strand = feature.strand
+
+                if feature_type == "gene":
+                    explicit_gene_locations[gene_id] = GeneLocation(
+                        id=gene_id,
+                        seq_id=feature.chrom,
+                        start=start,
+                        end=end,
+                        strand=strand,
+                    )
+                    continue
+
+                # non-gene feature, use to infer gene locations
+                gene_location = inferred_gene_locations.setdefault(
+                    gene_id,
+                    {
+                        "seq_id": feature.chrom,
+                        "start": start,
+                        "end": end,
+                        "strand": strand
+                        if strand != "."
+                        else "+",  # could be intron without a strand
+                    },
+                )
+                gene_location["seq_id"] = feature.chrom
+                gene_location["start"] = min(gene_location["start"], start)
+                gene_location["end"] = max(gene_location["end"], end)
+                if strand not in (None, "."):
+                    gene_location["strand"] = strand
+
             position += len(line)
 
         if self._collect_gene_locations:
-            for seq_id in self._gene_locations:
-                self._gene_locations[seq_id] = sorted(
-                    self._gene_locations[seq_id], key=lambda g: g.start
-                )
+            self._gene_locations = gather_gene_locations(
+                explicit_gene_locations, inferred_gene_locations
+            )
+
         return index
 
     def get(self, key):
@@ -253,39 +282,66 @@ class ODTFastaFileIndex(GeneAwareFileIndex):
         index = {}
         position = 0
         fasta_parser = FastaParser()
+        inferred_gene_locations = {}
+        explicit_gene_locations = {}
         for line in self._file:
             if line.startswith(">"):
                 region_name, additional_info, coordinates = (
                     fasta_parser.parse_fasta_header(line.strip())
                 )
                 gene_id = region_name.lstrip(">")
-                if gene_id:
-                    if gene_id not in index:
-                        index[gene_id] = []
-                    index[gene_id].append(position)
-                    # NOTE: ODT Fasta must include gene entries if used as sequence source
-                    if (
-                        additional_info.get("regiontype", ["unknown"])[0] == "gene"
-                        and self._collect_gene_locations
-                    ):
-                        gene_location = GeneLocation(
-                            id=gene_id,
-                            seq_id=coordinates["chromosome"][0],
-                            start=coordinates["start"][0],
-                            end=coordinates["end"][0],
-                            strand=additional_info["strand"][0],
-                        )
-                        if gene_location.seq_id not in self._gene_locations:
-                            self._gene_locations[gene_location.seq_id] = []
-                        self._gene_locations[gene_location.seq_id].append(gene_location)
-                    # TODO: infer gene start and end from other regions if gene entry is not present
+                if not gene_id:
+                    position += len(line)
+                    continue
+                if gene_id not in index:
+                    index[gene_id] = []
+                index[gene_id].append(position)
+
+                if not self._collect_gene_locations:
+                    position += len(line)
+                    continue
+
+                seq_id = coordinates["chromosome"][0]
+                start = int(coordinates["start"][0])
+                end = int(coordinates["end"][0])
+                strand = additional_info.get("strand", ["+"])[0]
+                region_type = additional_info.get("regiontype", ["unknown"])[0]
+
+                if region_type == "gene":
+                    explicit_gene_locations[gene_id] = GeneLocation(
+                        id=gene_id,
+                        seq_id=seq_id,
+                        start=start,
+                        end=end,
+                        strand=strand,
+                    )
+                    position += len(line)
+                    continue
+
+                # non-gene feature, use to infer gene locations
+                gene_location = inferred_gene_locations.setdefault(
+                    gene_id,
+                    {
+                        "seq_id": seq_id,
+                        "start": start,
+                        "end": end,
+                        "strand": strand
+                        if strand not in (None, ".")
+                        else "+",  # could be intron without a strand
+                    },
+                )
+                gene_location["seq_id"] = seq_id
+                gene_location["start"] = min(gene_location["start"], start)
+                gene_location["end"] = max(gene_location["end"], end)
+                if strand not in (None, "."):
+                    gene_location["strand"] = strand
             position += len(line)
 
         if self._collect_gene_locations:
-            for seq_id in self._gene_locations:
-                self._gene_locations[seq_id] = sorted(
-                    self._gene_locations[seq_id], key=lambda g: g.start
-                )
+            self._gene_locations = gather_gene_locations(
+                explicit_gene_locations, inferred_gene_locations
+            )
+
         return index
 
     def get(self, key):
@@ -324,3 +380,33 @@ def binary_search_gene_locations(gene_locations, start, end):
                 mid -= 1
             return mid
     return None
+
+
+def gather_gene_locations(explicit_gene_locations, inferred_gene_locations):
+    """Combine explicit and inferred gene locations into a single dictionary."""
+    combined_gene_locations = defaultdict(list)
+
+    # add explicit gene locations
+    for gene_id, gene_location in explicit_gene_locations.items():
+        combined_gene_locations[gene_location.seq_id].append(gene_location)
+
+    # add inferred gene locations, avoiding duplicates
+    for gene_id, gene_location in inferred_gene_locations.items():
+        if gene_id not in explicit_gene_locations:
+            seq_id = gene_location["seq_id"]
+            inferred = GeneLocation(
+                id=gene_id,
+                seq_id=seq_id,
+                start=gene_location["start"],
+                end=gene_location["end"],
+                strand=gene_location["strand"],
+            )
+            combined_gene_locations[seq_id].append(inferred)
+
+    # sort the gene locations by start position for each sequence ID
+    for seq_id in combined_gene_locations:
+        combined_gene_locations[seq_id] = sorted(
+            combined_gene_locations[seq_id], key=lambda g: g.start
+        )
+
+    return combined_gene_locations

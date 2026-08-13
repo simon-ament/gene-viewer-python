@@ -214,11 +214,18 @@ class GeneViewer:
                 for seq_id, gene_locations in all_gene_locations_raw.items()
             }
         else:
-            all_gene_locations: dict[str, list[GeneLocation]] = {
-                seq_id: [gene_location for gene_location in gene_locations]
-                for loader in self.regions_loaders
-                for seq_id, gene_locations in loader.gene_locations.items()
-            }
+            # collect gene locations from all region_loaders
+            # from duplicate entries choose the first
+            all_gene_locations = defaultdict(list)
+            genes_seen = set()
+            for loader in self.regions_loaders:
+                for seq_id, gene_locations in loader.gene_locations.items():
+                    for gene_location in gene_locations:
+                        if gene_location.id not in genes_seen:
+                            genes_seen.add(gene_location.id)
+                            all_gene_locations[gene_location.seq_id].append(
+                                gene_location
+                            )
 
         all_gene_locations_flattened = {}
         for gene_locations in all_gene_locations.values():
