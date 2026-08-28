@@ -1,13 +1,12 @@
 from abc import ABC, abstractmethod
 
-from src.types import GeneLocation
+from gene_viewer.types import GeneLocation
 
 
 class Loader(ABC):
     def __init__(self):
         self._lazy_init_done = False
 
-    @property
     @abstractmethod
     def cache_id(self):
         pass

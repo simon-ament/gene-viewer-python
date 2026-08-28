@@ -1,3 +1,4 @@
+from gene_viewer.helpers import _parse_GTF_line
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from io import StringIO  # for creating file-like objects from strings
@@ -6,8 +7,8 @@ from oligo_designer_toolsuite.utils import FastaParser
 from pybedtools import BedTool
 from pybedtools import helpers as _pybedtools_helpers
 
-from helpers import _get_GTF_attribute
-from src.types import GeneLocation
+from gene_viewer.helpers import _get_GTF_attribute
+from gene_viewer.types import GeneLocation
 
 
 class FileIndex(ABC):
@@ -90,7 +91,7 @@ class FastaFileIndex(FileIndex):
                 ):
                     index[next_gene.id] = (
                         position + (next_gene.start - 1 - seq_len_counter),
-                        next_gene.end - next_gene.start,
+                        next_gene.end - next_gene.start + 1,
                     )  # position and length
                     next_gene_index += 1
                     next_gene = (
@@ -102,10 +103,10 @@ class FastaFileIndex(FileIndex):
             position += len(line)
         return index
 
-    def get(self, key):
+    def get(self, key, default=None):
         super().get(key)  # Ensure the index is built
         if key not in self._index:
-            raise KeyError(f"Key '{key}' not found in index.")
+            return default
         (position, length) = self._index[key]
         self._file.seek(position)
         seq = ""
@@ -140,7 +141,7 @@ class BEDFileIndex(FileIndex):
             except Exception:
                 pass
             for feature in bedtool:
-                start = feature.start
+                start = feature.start + 1  # 0-based -> 1-based start position
                 end = feature.end
                 # find genes from self._gene_locations that overlaps with the feature
                 # use binary search to find the first gene that overlaps with the feature (self._gene_locations is sorted by start position)
@@ -160,10 +161,10 @@ class BEDFileIndex(FileIndex):
             position += len(line)
         return index
 
-    def get(self, key):
+    def get(self, key, default=None):
         super().get(key)  # Ensure the index is built
         if key not in self._index:
-            raise KeyError(f"Key '{key}' not found in index.")
+            return default
         positions = self._index[key]
         features = []
         for pos in positions:
@@ -185,6 +186,16 @@ class BEDFileIndex(FileIndex):
 
 # key: gene ID, return: list of features
 class GTFFileIndex(GeneAwareFileIndex):
+    def __init__(
+        self,
+        file_path,
+        gene_id_attribute: str,
+        gene_list: list[str] | None = None,
+        collect_gene_locations: bool = False,
+    ):
+        super().__init__(file_path, gene_list, collect_gene_locations)
+        self._gene_id_attribute = gene_id_attribute
+
     def _build_index(self):
         index = {}
         position = 0
@@ -194,59 +205,50 @@ class GTFFileIndex(GeneAwareFileIndex):
             if line.startswith(("#", "track", "browser")):
                 position += len(line)
                 continue
-            string_io = StringIO(line)
-            bedtool = BedTool(string_io)
-            # clean up the tag to avoid memory leaks in pybedtools
-            try:
-                _pybedtools_helpers._tags.pop(bedtool._tag, None)
-            except Exception:
-                pass
-
-            for feature in bedtool:
-                gene_id = _get_GTF_attribute(feature[8], "gene_id")
-                if not gene_id:
-                    continue
-                if gene_id not in index:
-                    index[gene_id] = []
-                index[gene_id].append(position)
-
-                if not self._collect_gene_locations:
-                    continue
-
-                feature_type = feature[2]
-                start = int(feature.start)
-                end = int(feature.end)
-                strand = feature.strand
-
-                if feature_type == "gene":
-                    explicit_gene_locations[gene_id] = GeneLocation(
-                        id=gene_id,
-                        seq_id=feature.chrom,
-                        start=start,
-                        end=end,
-                        strand=strand,
-                    )
-                    continue
-
-                # non-gene feature, use to infer gene locations
-                gene_location = inferred_gene_locations.setdefault(
-                    gene_id,
-                    {
-                        "seq_id": feature.chrom,
-                        "start": start,
-                        "end": end,
-                        "strand": strand
-                        if strand != "."
-                        else "+",  # could be intron without a strand
-                    },
-                )
-                gene_location["seq_id"] = feature.chrom
-                gene_location["start"] = min(gene_location["start"], start)
-                gene_location["end"] = max(gene_location["end"], end)
-                if strand not in (None, "."):
-                    gene_location["strand"] = strand
-
+            feature = _parse_GTF_line(line)
+            gene_id = _get_GTF_attribute(feature["attributes"], self._gene_id_attribute)
+            if not gene_id:
+                position += len(line)
+                continue
+            
+            if gene_id not in index:
+                index[gene_id] = []
+            index[gene_id].append(position)
             position += len(line)
+
+            if not self._collect_gene_locations:
+                continue
+
+            feature_type = feature["feature"]
+            start = feature["start"] + 1  # 0-based -> 1-based start position
+            end = feature["end"]
+            strand = feature["strand"]
+
+            if feature_type == "gene":
+                explicit_gene_locations[gene_id] = GeneLocation(
+                    id=gene_id,
+                    seq_id=feature["seqname"],
+                    start=start,
+                    end=end,
+                    strand=strand,
+                )
+                continue
+
+            # non-gene feature, use to infer gene locations (newest will override older ones)
+            gene_location = inferred_gene_locations.setdefault(
+                gene_id,
+                {
+                    "seq_id": feature["seqname"],
+                    "start": start,
+                    "end": end,
+                    "strand": strand if strand != "." else "+",  # could be intron without a strand
+                },
+            )
+            gene_location["seq_id"] = feature["seqname"]
+            gene_location["start"] = min(gene_location["start"], start)
+            gene_location["end"] = max(gene_location["end"], end)
+            if strand not in (None, "."):
+                gene_location["strand"] = strand
 
         if self._collect_gene_locations:
             self._gene_locations = gather_gene_locations(
@@ -255,24 +257,17 @@ class GTFFileIndex(GeneAwareFileIndex):
 
         return index
 
-    def get(self, key):
+    def get(self, key, default=None):
         super().get(key)  # Ensure the index is built
         if key not in self._index:
-            raise KeyError(f"Key '{key}' not found in index.")
+            return default
         positions = self._index[key]
         features = []
         for pos in positions:
             self._file.seek(pos)
             line = self._file.readline().strip()
-            string_io = StringIO(line)
-            bedtool = BedTool(string_io)
-            # clean up the tag to avoid memory leaks in pybedtools
-            try:
-                _pybedtools_helpers._tags.pop(bedtool._tag, None)
-            except Exception:
-                pass
-            for feature in bedtool:
-                features.append(feature)
+            feature = _parse_GTF_line(line)
+            features.append(feature)
         return features
 
 
@@ -304,7 +299,7 @@ class ODTFastaFileIndex(GeneAwareFileIndex):
                 seq_id = coordinates["chromosome"][0]
                 start = int(coordinates["start"][0])
                 end = int(coordinates["end"][0])
-                strand = additional_info.get("strand", ["+"])[0]
+                strand = coordinates["strand"][0]
                 region_type = additional_info.get("regiontype", ["unknown"])[0]
 
                 if region_type == "gene":
@@ -344,10 +339,10 @@ class ODTFastaFileIndex(GeneAwareFileIndex):
 
         return index
 
-    def get(self, key):
+    def get(self, key, default=None):
         super().get(key)  # Ensure the index is built
         if key not in self._index:
-            raise KeyError(f"Key '{key}' not found in index.")
+            return default
         positions = self._index[key]
         sequences = []
         for pos in positions:

@@ -6,12 +6,14 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Literal
 
-from src.loader.probes_loader import ProbesLoaderManual
-from src.loader.regions_loader import RegionsLoader
-from src.loader.sequences_loader import SequencesLoader
-from src.loader.track_loader import TrackLoader
-from src.processor import Processor
-from src.types import GeneLocation
+import zstandard as zstd
+
+from gene_viewer.loader.probes_loader import ProbesLoaderManual
+from gene_viewer.loader.regions_loader import RegionsLoader
+from gene_viewer.loader.sequences_loader import SequencesLoader
+from gene_viewer.loader.track_loader import TrackLoader
+from gene_viewer.processor import Processor
+from gene_viewer.types import GeneLocation
 
 
 class GeneViewer:
@@ -52,18 +54,18 @@ class GeneViewer:
         """Adds a regions loader to the GeneViewer."""
         self.regions_loaders.append(regions_loader)
 
-    def add_regions_GTF(self, gtf_file_path: str, region_types: list | None = None):
-        from src.loader.regions_loader import RegionsLoaderGTF
+    def load_regions_GTF(self, gtf_file_path: str, region_types: list[str] = ["intron", "exon"], gene_id_attribute: str = "gene_id"):
+        from gene_viewer.loader.regions_loader import RegionsLoaderGTF
 
-        self.add_regions_loader(RegionsLoaderGTF(gtf_file_path, region_types or []))
+        self.add_regions_loader(RegionsLoaderGTF(gtf_file_path, region_types, gene_id_attribute))
 
-    def add_regions_ODTFasta(
-        self, odt_fasta_file_path: str, region_types: list | None = None
+    def load_regions_ODTFasta(
+        self, odt_fasta_file_path: str, region_types: list[str] = ["intron", "exon"]
     ):
-        from src.loader.regions_loader import RegionsLoaderODTFasta
+        from gene_viewer.loader.regions_loader import RegionsLoaderODTFasta
 
         self.add_regions_loader(
-            RegionsLoaderODTFasta(odt_fasta_file_path, region_types or [])
+            RegionsLoaderODTFasta(odt_fasta_file_path, region_types)
         )
 
     # Sequences Loaders
@@ -72,18 +74,18 @@ class GeneViewer:
         """Adds a sequences loader to the GeneViewer."""
         self.sequences_loaders.append(sequences_loader)
 
-    def add_sequences_Fasta(self, fasta_file_path: str):
-        from src.loader.sequences_loader import SequencesLoaderFasta
+    def load_sequences_Fasta(self, fasta_file_path: str):
+        from gene_viewer.loader.sequences_loader import SequencesLoaderFasta
 
         self.add_sequences_loader(SequencesLoaderFasta(fasta_file_path))
 
-    def add_sequences_ODTFasta(
-        self, odt_fasta_file_path: str, region_types: list | None = None
+    def load_sequences_ODTFasta(
+        self, odt_fasta_file_path: str, region_types: list[str] = ["intron", "exon"]
     ):
-        from src.loader.sequences_loader import SequencesLoaderODTFasta
+        from gene_viewer.loader.sequences_loader import SequencesLoaderODTFasta
 
         self.add_sequences_loader(
-            SequencesLoaderODTFasta(odt_fasta_file_path, region_types or [])
+            SequencesLoaderODTFasta(odt_fasta_file_path, region_types)
         )
 
     # Track Loaders
@@ -92,30 +94,32 @@ class GeneViewer:
         """Adds a track loader to the GeneViewer."""
         self.track_loaders[track_name].append(track_loader)
 
-    def add_track_BED(
+    def load_track_BED(
         self,
         bed_file_path: str,
         track_name: str,
         opacity_from_score: bool = False,
         max_score: float = 1000.0,
     ):
-        from src.loader.track_loader import TrackLoaderBED
+        from gene_viewer.loader.track_loader import TrackLoaderBED
 
         self.add_track_loader(
             TrackLoaderBED(bed_file_path, opacity_from_score, max_score), track_name
         )
 
-    def add_track_GTF(
+    def load_track_GTF(
         self,
         gtf_file_path: str,
         track_name: str,
+        feature_types: list[str] | None = None,
         opacity_from_score: bool = False,
         max_score: float = 1000.0,
+        gene_id_attribute: str = "gene_id",
     ):
-        from src.loader.track_loader import TrackLoaderGTF
+        from gene_viewer.loader.track_loader import TrackLoaderGTF
 
         self.add_track_loader(
-            TrackLoaderGTF(gtf_file_path, opacity_from_score, max_score), track_name
+            TrackLoaderGTF(gtf_file_path, feature_types, opacity_from_score, max_score, gene_id_attribute), track_name
         )
 
     # Probes
@@ -131,17 +135,17 @@ class GeneViewer:
         self.processors.append(processor)
 
     def merge_exon_junctions(self):
-        from src.processor import ProcessorExonJunctions
+        from gene_viewer.processor import ProcessorExonJunctions
 
         self.add_processor(ProcessorExonJunctions())
 
     def fill_gaps_with_introns(self):
-        from src.processor import ProcessorIntronGaps
+        from gene_viewer.processor import ProcessorIntronGaps
 
         self.add_processor(ProcessorIntronGaps())
 
     def restrict_to_exon_sequences(self):
-        from src.processor import ProcessorExonSequencesOnly
+        from gene_viewer.processor import ProcessorExonSequencesOnly
 
         self.add_processor(ProcessorExonSequencesOnly())
 
@@ -193,7 +197,7 @@ class GeneViewer:
         ### 3. Collect all genes that need to be visualized and cached.
 
         if self.genes_without_probes != "visualize":
-            genes_with_probes: set[str] = set(self.probes_loader.gene_list())
+            genes_with_probes: set[str] = set(self.probes_loader.gene_list)
 
         regions_cache_metadata_path = (
             self.dir_path
@@ -319,6 +323,9 @@ class GeneViewer:
             required_processors,
         ) in genes_to_process.items():
             for gene_id in gene_set:
+                if gene_id not in all_gene_locations_flattened:
+                    continue  # Skip genes that are not found in the gene locations
+                
                 gene_data = self._get_gene_data(
                     all_gene_locations_flattened[gene_id],
                     required_inputs,
@@ -331,9 +338,9 @@ class GeneViewer:
                         self.dir_path
                         / f"{output_type}_cache"
                         / f"{cache_dirs[output_type]}"
-                        / f"{gene_id}.json"
+                        / f"{gene_id}.json.zst"
                     )
-                    self._write_json(cache_data, cache_file_path)
+                    self._write_zstd_json(cache_data, cache_file_path)
 
                 if gene_id in gene_ids_to_visualize:
                     gene_location = all_gene_locations_flattened[gene_id]
@@ -347,20 +354,9 @@ class GeneViewer:
                         "source": self.source,
                     }
                     for output_type, cache_dir in cache_dirs.items():
-                        ref_path = (
-                            self.dir_path
-                            / f"{output_type}_cache"
-                            / f"{cache_dir}"
-                            / f"{gene_id}.json"
-                        )
-                        if ref_path.exists():
-                            gene_data_visualization[output_type] = {
-                                "_ref": str(cache_dir / f"{gene_id}.json")
-                            }
-                        else:
-                            gene_data_visualization[output_type] = (
-                                [] if output_type == "sequences" else {}
-                            )
+                        gene_data_visualization[output_type] = {
+                            "_ref": str(cache_dir / f"{gene_id}.json.zst")
+                        }
 
                     self._write_json(
                         gene_data_visualization,
@@ -423,7 +419,7 @@ class GeneViewer:
         if self.genes_without_probes == "visualize":
             gene_ids_to_visualize: set[str] = all_gene_ids
         else:
-            gene_ids_to_visualize: set[str] = set(self.probes_loader.gene_list())
+            gene_ids_to_visualize: set[str] = set(self.probes_loader.gene_list)
 
         gene_locations_to_visualize = {
             seq_id: [gene_location for gene_location in gene_locations]
@@ -518,7 +514,9 @@ class GeneViewer:
 
         for processor in self.processors:
             if required_processors is None or processor.id in required_processors:
-                gene_data = processor.process(gene_data)
+                new_gene_data = processor.process(gene_data)
+                for data_type in processor.output:
+                    gene_data[data_type] = new_gene_data[data_type]
 
         return gene_data
 
@@ -527,3 +525,12 @@ class GeneViewer:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         with open(file_path, "w") as f:
             json.dump(data, f, indent=4)
+
+    def _write_zstd_json(self, data, file_path: Path):
+        """Writes data as a zstandard-compressed JSON file."""
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(file_path, "wb") as f:
+            cctx = zstd.ZstdCompressor()
+            compressed = cctx.compress(json.dumps(data).encode("utf-8"))
+            f.write(compressed)
+        

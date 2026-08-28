@@ -2,13 +2,12 @@ import hashlib
 from abc import abstractmethod
 from collections import defaultdict
 
-from src.types import GeneLocation
+from gene_viewer.types import GeneLocation
 
 from .loader import Loader
 
 
 class ProbesLoader(Loader):
-    @property
     @abstractmethod
     def gene_list(self):
         """Return a list of gene IDs for which probes are available."""

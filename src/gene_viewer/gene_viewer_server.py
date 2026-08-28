@@ -16,7 +16,7 @@ class GeneViewerServer:
             )
             if not gene_list_file_path.exists():
                 return {
-                    "error": f"Gene list metadata file not found for viewer_id: {viewer_id}"
+                    "error": f"Viewer with ID {viewer_id} not found"
                 }
             with open(gene_list_file_path, "r") as f:
                 metadata = json.load(f)
@@ -34,7 +34,7 @@ class GeneViewerServer:
 
         if not gene_data_file_path.exists():
             return {
-                "error": f"Gene data file not found for gene_id: {resolved_gene_id}"
+                "error": f"Data for gene {resolved_gene_id} not found"
             }
 
         with open(gene_data_file_path, "r") as f:

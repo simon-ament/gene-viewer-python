@@ -9,11 +9,6 @@ class Processor(ABC):
 
     @property
     @abstractmethod
-    def version(self):
-        pass
-
-    @property
-    @abstractmethod
     def input(self):
         pass
 
@@ -28,8 +23,7 @@ class Processor(ABC):
 
 
 class ProcessorExonJunctions(Processor):
-    id = "exon_junctions"
-    version = "1"
+    id = "exon_junctions_v1"
     input = ("regions",)
     output = ("regions",)
 
@@ -42,7 +36,7 @@ class ProcessorExonJunctions(Processor):
         # merge exon junctions with same exon_number into single exon
         for transcript_id, transcript_regions in data["regions"].items():
             exon_junctions = list(
-                filter(lambda x: x["type"] == "exon_junction", transcript_regions)
+                filter(lambda x: x["type"] == "exonexonjunction", transcript_regions)
             )
 
             if not exon_junctions:
@@ -53,7 +47,9 @@ class ProcessorExonJunctions(Processor):
             merged_exon_junctions = []
             last_exon_junction = sorted_exon_junctions[0]
             for exon_junction in sorted_exon_junctions[1:]:
-                if exon_junction["exon_number"] == last_exon_junction["exon_number"]:
+                exon_number = exon_junction["exon_number"] # first exon number
+                last_exon_number = last_exon_junction["exon_number"] # second exon number
+                if exon_number == last_exon_number:
                     # merge exon junctions with same exon_number
                     last_exon_junction["end"] = max(
                         last_exon_junction["end"], exon_junction["end"]
@@ -66,7 +62,7 @@ class ProcessorExonJunctions(Processor):
 
             # replace exon junctions with merged exon junctions
             data["regions"][transcript_id] = (
-                list(filter(lambda x: x["type"] != "exon_junction", transcript_regions))
+                list(filter(lambda x: x["type"] != "exonexonjunction", transcript_regions))
                 + merged_exon_junctions
             )
 
@@ -74,8 +70,7 @@ class ProcessorExonJunctions(Processor):
 
 
 class ProcessorIntronGaps(Processor):
-    id = "intron_gaps"
-    version = "1"
+    id = "intron_gaps_v1"
     input = ("regions",)
     output = ("regions",)
 
@@ -110,10 +105,9 @@ class ProcessorIntronGaps(Processor):
 
 
 class ProcessorExonSequencesOnly(Processor):
-    id = "exon_sequences_only"
-    version = "1"
+    id = "exon_sequences_only_v1"
     input = ("regions", "sequences")
-    output = ("regions",)
+    output = ("sequences",)
 
     def __init__(
         self,
@@ -131,41 +125,63 @@ class ProcessorExonSequencesOnly(Processor):
             data["sequences"], key=lambda x: (x["start"], len(x["sequence"]))
         )
 
-        # iterate through exons and sequences in parallel to restrict sequences to only exons
+        # iterate through sequences and exons in parallel to restrict sequences to only exons
         exon_idx = 0
         sequence_idx = 0
-        while exon_idx < len(sorted_exons) and sequence_idx < len(sorted_sequences):
-            exon = sorted_exons[exon_idx]
-            sequence = sorted_sequences[sequence_idx]
+        selection_start = 0
+        selection_end = 0
+        sequences = []
 
-            exon_start = exon["start"]
-            exon_end = exon["end"]
-            seq_start = sequence["start"]
-            seq_end = seq_start + len(sequence["sequence"]) - 1
-
-            if seq_end < exon_start:
-                # sequence is before the exon, move to the next sequence
-                sequence_idx += 1
-            elif seq_start > exon_end:
-                # sequence is after the exon, move to the next exon
-                exon_idx += 1
-            else:
-                # sequence overlaps with the exon, restrict it to the exon boundaries
-                restricted_start = max(seq_start, exon_start)
-                restricted_end = min(seq_end, exon_end)
-                restricted_sequence = sequence["sequence"][
-                    restricted_start - seq_start : restricted_end - seq_start + 1
-                ]
-                data["sequences"].append(
-                    {"start": restricted_start, "sequence": restricted_sequence}
+        while sequence_idx < len(sorted_sequences) and exon_idx < len(sorted_exons):
+            # 1. find next selection start, i.e. the next position where both a sequence and an exon exist
+            while (
+                sequence_idx < len(sorted_sequences)
+                and exon_idx < len(sorted_exons)
+                and (
+                    sorted_sequences[sequence_idx]["start"]
+                    > sorted_exons[exon_idx]["end"]
+                    or sorted_exons[exon_idx]["start"]
+                    > sorted_sequences[sequence_idx]["start"] + len(sorted_sequences[sequence_idx]["sequence"]) - 1
                 )
-                if restricted_end == seq_end:
-                    # sequence is fully contained within the exon, move to the next sequence
+            ):
+                if sorted_sequences[sequence_idx]["start"] < sorted_exons[exon_idx]["start"]:
                     sequence_idx += 1
                 else:
-                    # sequence extends beyond the exon, move to the next exon
                     exon_idx += 1
 
+            selection_start = max(
+                sorted_sequences[sequence_idx]["start"], sorted_exons[exon_idx]["start"]
+            )
+
+            # 2. find next selection end, i.e. the next position where the sequence ends or no continuous exon exists
+            exon_end = sorted_exons[exon_idx]["end"]
+            while (
+                exon_idx + 1 < len(sorted_exons)
+                and sorted_exons[exon_idx + 1]["start"] <= exon_end + 1
+            ):
+                exon_idx += 1
+                exon_end = sorted_exons[exon_idx]["end"]
+
+            selection_end = min(
+                sorted_sequences[sequence_idx]["start"] + len(sorted_sequences[sequence_idx]["sequence"]) - 1, exon_end
+            )
+            
+            # 3. select the sequence from selection_start to selection_end and add it to the sequences list
+            if selection_start <= selection_end:
+                sequence = sorted_sequences[sequence_idx]["sequence"][
+                    selection_start - sorted_sequences[sequence_idx]["start"] : selection_end
+                    - sorted_sequences[sequence_idx]["start"]
+                    + 1
+                ]
+                sequences.append({"start": selection_start, "sequence": sequence})
+
+            # 4. move to the next sequence or exon
+            if sorted_exons[exon_idx]["end"] <= selection_end:
+                exon_idx += 1
+            else:
+                sequence_idx += 1
+
+        data["sequences"] = sequences
         return data
 
 
