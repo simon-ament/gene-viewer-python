@@ -26,7 +26,9 @@ class RegionsLoader(Loader):
 
 
 class RegionsLoaderGTF(RegionsLoader):
-    def __init__(self, gtf_file_path: str, region_types: list[str], gene_id_attribute: str):
+    def __init__(
+        self, gtf_file_path: str, region_types: list[str], gene_id_attribute: str
+    ):
         super().__init__()
         self._gtf_file_path = gtf_file_path
         self._gtf_file_index: GTFFileIndex | None = None  # will be inizialized lazily
@@ -44,7 +46,10 @@ class RegionsLoaderGTF(RegionsLoader):
 
     def _lazy_init(self):
         self._gtf_file_index = GTFFileIndex(
-            self._gtf_file_path, self._gene_id_attribute, gene_list=self._gene_list, collect_gene_locations=True
+            self._gtf_file_path,
+            self._gene_id_attribute,
+            gene_list=self._gene_list,
+            collect_gene_locations=True,
         )
 
     def load_gene(self, gene: GeneLocation):
@@ -65,7 +70,9 @@ class RegionsLoaderGTF(RegionsLoader):
             }
             if exon_number is not None:
                 region["exon_number"] = int(exon_number)
-            regions[_get_GTF_attribute(feature["attributes"], "transcript_id")].append(region)
+            regions[_get_GTF_attribute(feature["attributes"], "transcript_id")].append(
+                region
+            )
         return regions
 
     @property
@@ -75,11 +82,7 @@ class RegionsLoaderGTF(RegionsLoader):
 
 
 class RegionsLoaderODTFasta(RegionsLoader):
-    def __init__(
-        self,
-        odt_fasta_file_path: str,
-        region_types: list[str]
-    ):
+    def __init__(self, odt_fasta_file_path: str, region_types: list[str]):
         super().__init__()
         self._odt_fasta_file_path = odt_fasta_file_path
         self._odt_fasta_file_index = None  # will be initialized lazily
@@ -109,7 +112,9 @@ class RegionsLoaderODTFasta(RegionsLoader):
             type = additional_info.get("regiontype", ["unknown"])[0]
             if self._region_types and type not in self._region_types:
                 continue
-            for transcript_index, transcript_id in enumerate(additional_info.get("transcript_id", ["unknown"])):
+            for transcript_index, transcript_id in enumerate(
+                additional_info.get("transcript_id", ["unknown"])
+            ):
                 subregions_indices = [0, 1] if type == "exonexonjunction" else [0]
                 for idx in subregions_indices:
                     region = {
@@ -118,7 +123,9 @@ class RegionsLoaderODTFasta(RegionsLoader):
                         "type": type,
                         "strand": coordinates["strand"][idx],
                     }
-                    exon_number = additional_info.get("exon_number", [None])[transcript_index]
+                    exon_number = additional_info.get("exon_number", [None])[
+                        transcript_index
+                    ]
                     if exon_number is not None and type != "exonexonjunction":
                         region["exon_number"] = int(exon_number)
                     if type == "exonexonjunction":

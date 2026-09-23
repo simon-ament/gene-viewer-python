@@ -68,7 +68,7 @@ class TrackLoaderGTF(TrackLoader):
         feature_types: list[str] | None,
         opacity_from_score: bool,
         max_score: float,
-        gene_id_attribute: str
+        gene_id_attribute: str,
     ):
         super().__init__()
         self._gtf_file_path = gtf_file_path
@@ -88,8 +88,15 @@ class TrackLoaderGTF(TrackLoader):
     def _lazy_init(self):
         if not self._gene_locations:
             raise ValueError("Gene locations must be set before loading tracks.")
-        gene_list = [gene.id for gene_list in self._gene_locations.values() for gene in gene_list]
-        self._gtf_file_index = GTFFileIndex(self._gtf_file_path, self._gene_id_attribute, gene_list=gene_list, collect_gene_locations=True)
+        gene_list = [
+            gene.id for gene_list in self._gene_locations.values() for gene in gene_list
+        ]
+        self._gtf_file_index = GTFFileIndex(
+            self._gtf_file_path,
+            self._gene_id_attribute,
+            gene_list=gene_list,
+            collect_gene_locations=True,
+        )
 
     def load_gene(self, gene: GeneLocation):
         super().load_gene(gene)

@@ -1,4 +1,3 @@
-from gene_viewer.helpers import _parse_GTF_line
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from io import StringIO  # for creating file-like objects from strings
@@ -7,7 +6,7 @@ from oligo_designer_toolsuite.utils import FastaParser
 from pybedtools import BedTool
 from pybedtools import helpers as _pybedtools_helpers
 
-from gene_viewer.helpers import _get_GTF_attribute
+from gene_viewer.helpers import _get_GTF_attribute, _parse_GTF_line
 from gene_viewer.types import GeneLocation
 
 
@@ -210,7 +209,7 @@ class GTFFileIndex(GeneAwareFileIndex):
             if not gene_id:
                 position += len(line)
                 continue
-            
+
             if gene_id not in index:
                 index[gene_id] = []
             index[gene_id].append(position)
@@ -241,7 +240,9 @@ class GTFFileIndex(GeneAwareFileIndex):
                     "seq_id": feature["seqname"],
                     "start": start,
                     "end": end,
-                    "strand": strand if strand != "." else "+",  # could be intron without a strand
+                    "strand": strand
+                    if strand != "."
+                    else "+",  # could be intron without a strand
                 },
             )
             gene_location["seq_id"] = feature["seqname"]

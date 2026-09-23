@@ -1,0 +1,14 @@
+[project]
+name="gene_viewer"
+
+version="0.0.1"
+authors = [
+    { name="Simon Ament" }
+]
+description = "A lightweight and embeddable per-gene visualization of genomic regions, probes, and custom tracks."
+dependencies = [
+    "zstandard",
+    "oligo_designer_toolsuite",
+    "pybedtools",
+    "biopython",
+]

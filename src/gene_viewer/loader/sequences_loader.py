@@ -70,7 +70,9 @@ class SequencesLoaderODTFasta(SequencesLoader):
     def _lazy_init(self):
         if not self._gene_locations:
             raise ValueError("Gene locations must be set before loading sequences.")
-        gene_list = [gene.id for gene_list in self._gene_locations.values() for gene in gene_list]
+        gene_list = [
+            gene.id for gene_list in self._gene_locations.values() for gene in gene_list
+        ]
         self._odt_fasta_file_index = ODTFastaFileIndex(
             self._odt_fasta_file_path, gene_list=gene_list
         )
@@ -87,7 +89,11 @@ class SequencesLoaderODTFasta(SequencesLoader):
                 sequence = sequence[
                     ::-1
                 ]  # is reverse complement already, just reverse it
-            if not self._region_types or additional_info.get("regiontype", ["unknown"])[0] in self._region_types:
+            if (
+                not self._region_types
+                or additional_info.get("regiontype", ["unknown"])[0]
+                in self._region_types
+            ):
                 start = coordinates["start"][0]  # 1-based start position
                 sequences.append({"start": start, "sequence": sequence})
         return deduplicate_sequences(sequences)

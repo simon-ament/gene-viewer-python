@@ -1,5 +1,3 @@
-import copy
-import hashlib
 import json
 from collections import defaultdict
 from dataclasses import asdict
@@ -8,6 +6,7 @@ from typing import Literal
 
 import zstandard as zstd
 
+from gene_viewer.cache_dag import DataNode, LoaderNode, ProcessorNode
 from gene_viewer.loader.probes_loader import ProbesLoaderManual
 from gene_viewer.loader.regions_loader import RegionsLoader
 from gene_viewer.loader.sequences_loader import SequencesLoader
@@ -39,12 +38,10 @@ class GeneViewer:
         )  # default probe loader
         self.processors: list[Processor] = []
 
-        self.loaders = {
+        self.loaders: dict[str, list] = {
             "regions": self.regions_loaders,
             "sequences": self.sequences_loaders,
-            "tracks": [
-                loader for loaders in self.track_loaders.values() for loader in loaders
-            ],
+            "tracks": self.track_loaders,
             "probes": [self.probes_loader],
         }
 
@@ -54,15 +51,28 @@ class GeneViewer:
         """Adds a regions loader to the GeneViewer."""
         self.regions_loaders.append(regions_loader)
 
-    def load_regions_GTF(self, gtf_file_path: str, region_types: list[str] = ["intron", "exon"], gene_id_attribute: str = "gene_id"):
+    def load_regions_GTF(
+        self,
+        gtf_file_path: str,
+        region_types: list[str] | None = None,
+        gene_id_attribute: str = "gene_id",
+    ):
         from gene_viewer.loader.regions_loader import RegionsLoaderGTF
 
-        self.add_regions_loader(RegionsLoaderGTF(gtf_file_path, region_types, gene_id_attribute))
+        if region_types is None:
+            region_types = ["intron", "exon"]
+
+        self.add_regions_loader(
+            RegionsLoaderGTF(gtf_file_path, region_types, gene_id_attribute)
+        )
 
     def load_regions_ODTFasta(
-        self, odt_fasta_file_path: str, region_types: list[str] = ["intron", "exon"]
+        self, odt_fasta_file_path: str, region_types: list[str] | None = None
     ):
         from gene_viewer.loader.regions_loader import RegionsLoaderODTFasta
+
+        if region_types is None:
+            region_types = ["intron", "exon"]
 
         self.add_regions_loader(
             RegionsLoaderODTFasta(odt_fasta_file_path, region_types)
@@ -80,9 +90,12 @@ class GeneViewer:
         self.add_sequences_loader(SequencesLoaderFasta(fasta_file_path))
 
     def load_sequences_ODTFasta(
-        self, odt_fasta_file_path: str, region_types: list[str] = ["intron", "exon"]
+        self, odt_fasta_file_path: str, region_types: list[str] | None = None
     ):
         from gene_viewer.loader.sequences_loader import SequencesLoaderODTFasta
+
+        if region_types is None:
+            region_types = ["intron", "exon"]
 
         self.add_sequences_loader(
             SequencesLoaderODTFasta(odt_fasta_file_path, region_types)
@@ -119,7 +132,14 @@ class GeneViewer:
         from gene_viewer.loader.track_loader import TrackLoaderGTF
 
         self.add_track_loader(
-            TrackLoaderGTF(gtf_file_path, feature_types, opacity_from_score, max_score, gene_id_attribute), track_name
+            TrackLoaderGTF(
+                gtf_file_path,
+                feature_types,
+                opacity_from_score,
+                max_score,
+                gene_id_attribute,
+            ),
+            track_name,
         )
 
     # Probes
@@ -152,57 +172,38 @@ class GeneViewer:
     # Save
 
     def save(self):
-        ### 1. Determine all dependencies between loaders and processors, and the required inputs for each output type.
-
-        dependencies = {}
-        regions_loaders_cache_ids = tuple(
-            loader.cache_id for loader in self.regions_loaders
-        )
-
-        for data_type, loaders in self.loaders.items():
-            dependencies[data_type] = {
-                "depends_on": {data_type},
-                "processors_used": set(),
-                "computation_path": (
-                    "base",
-                    regions_loaders_cache_ids,
-                    tuple(loader.cache_id for loader in loaders),
-                ),
-            }
+        ### 1. Build Cache DAG
+        dag_roots = {}
+        region_loader_cache_ids = [loader.cache_id for loader in self.regions_loaders]
+        for output_type, loaders in self.loaders.items():
+            if output_type == "tracks":
+                cache_ids = [
+                    f"{track_name}:{loader.cache_id}"
+                    for track_name, loader in loaders.items()
+                ]
+            else:
+                cache_ids = [loader.cache_id for loader in loaders]
+            dag_roots[output_type] = LoaderNode(
+                output_type, self.dir_path, cache_ids, region_loader_cache_ids
+            )
 
         for processor in self.processors:
-            # create a snapshot of the current nested dependencies to read from while we update the nested_dependencies dictionary
-            deps_snapshot = copy.deepcopy(dependencies)
-
-            for output_type in processor.output:
-                # ensure deterministic iteration over inputs
-                inputs_sorted = sorted(processor.input)
-                dependencies[output_type]["depends_on"].update(
-                    dep for dep in inputs_sorted
-                )
-                dependencies[output_type]["processors_used"].add(processor.id)
-                dependencies[output_type]["computation_path"] = (processor.id,) + tuple(
-                    deps_snapshot[dep] for dep in inputs_sorted
-                )
-
-        ### 2. Determine the cache directories for each data type based on the computation path
-
-        cache_dirs = {
-            data_type: Path(
-                f"{hashlib.sha256(str(deps['computation_path']).encode()).hexdigest()}"
+            processor_node = ProcessorNode(
+                processor, [dag_roots[input_type] for input_type in processor.input]
             )
-            for data_type, deps in dependencies.items()
-        }
+            for output_type in processor.output:
+                dag_roots[output_type] = DataNode(
+                    output_type, self.dir_path, processor_node
+                )
 
-        ### 3. Collect all genes that need to be visualized and cached.
-
+        ### 2. Determine which genes need to be visualized and cached.
         if self.genes_without_probes != "visualize":
             genes_with_probes: set[str] = set(self.probes_loader.gene_list)
 
         regions_cache_metadata_path = (
             self.dir_path
             / "regions_cache"
-            / f"{cache_dirs['regions']}"
+            / f"{dag_roots['regions'].cache_id}"
             / "_metadata.json"
         )
         if regions_cache_metadata_path.exists():
@@ -223,7 +224,7 @@ class GeneViewer:
             all_gene_locations = defaultdict(list)
             genes_seen = set()
             for loader in self.regions_loaders:
-                for seq_id, gene_locations in loader.gene_locations.items():
+                for gene_locations in loader.gene_locations.values():
                     for gene_location in gene_locations:
                         if gene_location.id not in genes_seen:
                             genes_seen.add(gene_location.id)
@@ -248,18 +249,17 @@ class GeneViewer:
             gene_ids_to_visualize = all_gene_ids
 
         gene_locations_to_process = {
-            seq_id: [gene_location for gene_location in gene_locations]
-            for seq_id, gene_locations in all_gene_locations.items()
-            if any(
-                gene_location.id in gene_ids_to_process
+            seq_id: [
+                gene_location
                 for gene_location in gene_locations
-            )
+                if gene_location.id in gene_ids_to_process
+            ]
+            for seq_id, gene_locations in all_gene_locations.items()
         }
 
-        ### 4. Provide gene locations to loaders that require them.
-
+        ### 3. Provide gene locations to loaders that require them.
         for loader in self.regions_loaders:
-            loader.limit_to_genes(list(gene_ids_to_process))
+            loader.limit_to_genes(list(gene_ids_to_visualize))
 
         for loader in self.sequences_loaders:
             loader.set_gene_locations(gene_locations_to_process)
@@ -268,111 +268,98 @@ class GeneViewer:
             for loader in track_loaders:
                 loader.set_gene_locations(gene_locations_to_process)
 
-        ### 5. For every input type, determine which genes are already cached and which need to be processed.
+        ### 4. Evaluate Cache DAG and write data to disk
 
-        unprocessed_genes_by_output_type = {}
-
-        for data_type in dependencies:
-            cache_metadata_path = (
+        blobs = {}
+        indices = {}
+        offsets = {}
+        for output_type in self.loaders:
+            blob_location = (
                 self.dir_path
-                / f"{data_type}_cache"
-                / f"{cache_dirs[data_type]}"
-                / "_metadata.json"
+                / f"{output_type}_cache"
+                / f"{dag_roots[output_type].cache_id}"
+                / "data.blob"
             )
-            if cache_metadata_path.exists():
-                with open(cache_metadata_path, "r") as f:
-                    cache_metadata = json.load(f)
-                cached_genes: set[str] = set(cache_metadata.get("genes_cached", []))
-            else:
-                cached_genes: set[str] = set()
+            blob_location.parent.mkdir(parents=True, exist_ok=True)
+            blobs[output_type] = open(blob_location, "ab")
+            indices[output_type] = {}
+            offsets[output_type] = 0
 
-            # Update the unprocessed genes for this data type based on the genes to process
-            unprocessed_genes = gene_ids_to_process - cached_genes
-            unprocessed_genes_by_output_type[data_type] = unprocessed_genes
-
-        ### 6. Build a mapping of output type combinations to the genes, inputs, and processors required to generate them.
-
-        genes_to_process = defaultdict(lambda: (set(), set(), set()))
+        cctx = zstd.ZstdCompressor(level=3)
 
         for gene_id in gene_ids_to_process:
-            required_outputs = set()
-            required_inputs = set()
-            required_processors = set()
+            if gene_id not in all_gene_locations_flattened:
+                continue  # Skip genes that are not found in the gene locations
 
-            for (
-                data_type,
-                unprocessed_genes,
-            ) in unprocessed_genes_by_output_type.items():
-                if gene_id in unprocessed_genes:
-                    required_outputs.add(data_type)
-                    required_inputs.update(dependencies[data_type]["depends_on"])
-                    required_processors.update(
-                        dependencies[data_type]["processors_used"]
-                    )
-
-            required_outputs_sorted = tuple(sorted(required_outputs))
-            genes_to_process[required_outputs_sorted][0].add(gene_id)
-            genes_to_process[required_outputs_sorted][1].update(required_inputs)
-            genes_to_process[required_outputs_sorted][2].update(required_processors)
-
-        ### 7. Generate and save gene data for all genes in the gene lists.
-
-        for output_types, (
-            gene_set,
-            required_inputs,
-            required_processors,
-        ) in genes_to_process.items():
-            for gene_id in gene_set:
-                if gene_id not in all_gene_locations_flattened:
-                    continue  # Skip genes that are not found in the gene locations
-                
-                gene_data = self._get_gene_data(
-                    all_gene_locations_flattened[gene_id],
-                    required_inputs,
-                    required_processors,
+            gene_location = all_gene_locations_flattened[gene_id]
+            gene_data = {}
+            for output_type in self.loaders:
+                gene_data[output_type] = dag_roots[output_type].load_gene(
+                    gene_location, self.loaders, return_ref=True
                 )
 
-                for output_type in output_types:
-                    cache_data = gene_data[output_type]
-                    cache_file_path = (
-                        self.dir_path
-                        / f"{output_type}_cache"
-                        / f"{cache_dirs[output_type]}"
-                        / f"{gene_id}.json.zst"
-                    )
-                    self._write_zstd_json(cache_data, cache_file_path)
-
-                if gene_id in gene_ids_to_visualize:
-                    gene_location = all_gene_locations_flattened[gene_id]
-                    gene_data_visualization = {
-                        "id": gene_id,
-                        "seq_id": gene_location.seq_id,
-                        "start": gene_location.start,
-                        "end": gene_location.end,
-                        "strand": gene_location.strand,
-                        "species": self.species,
-                        "source": self.source,
+            if gene_id in gene_ids_to_visualize:
+                gene_location = all_gene_locations_flattened[gene_id]
+                gene_data_visualization = {
+                    "id": gene_id,
+                    "seq_id": gene_location.seq_id,
+                    "start": gene_location.start,
+                    "end": gene_location.end,
+                    "strand": gene_location.strand,
+                    "species": self.species,
+                    "source": self.source,
+                }
+                for output_type in self.loaders:
+                    gene_data_visualization[output_type] = {
+                        "_ref": dag_roots[output_type].cache_id,
                     }
-                    for output_type, cache_dir in cache_dirs.items():
-                        gene_data_visualization[output_type] = {
-                            "_ref": str(cache_dir / f"{gene_id}.json.zst")
-                        }
 
-                    self._write_json(
-                        gene_data_visualization,
-                        self.dir_path
-                        / "visualizations"
-                        / f"{self.viewer_id}"
-                        / f"{gene_id}.json",
-                    )
+                self._write_json(
+                    gene_data_visualization,
+                    self.dir_path
+                    / "visualizations"
+                    / f"{self.viewer_id}"
+                    / f"{gene_id}.json",
+                )
 
-        ### 8. Save the gene list and metadata for the visualizations.
+            for output_type in self.loaders:
+                cache_data = gene_data[output_type]
+                if "_ref" in cache_data:
+                    # If the data is a reference, we don't need to store it again
+                    continue
+                serialized_data = json.dumps(cache_data).encode("utf-8")
+                compressed_data = cctx.compress(serialized_data)
+                length = len(compressed_data)
+                blobs[output_type].write(compressed_data)
+                indices[output_type][gene_id] = {
+                    "offset": offsets[output_type],
+                    "length": length,
+                }
+                offsets[output_type] += length
+
+        for output_type in self.loaders:
+            blobs[output_type].close()
+            index_location = (
+                self.dir_path
+                / f"{output_type}_cache"
+                / f"{dag_roots[output_type].cache_id}"
+                / "_index.json"
+            )
+            if index_location.exists():
+                with open(index_location, "r") as f:
+                    index_content = json.load(f)
+                    index_content.update(indices[output_type])
+            else:
+                index_content = indices[output_type]
+            self._write_json(index_content, index_location)
+
+        ### 5. Save the gene list and metadata for the visualizations.
 
         for output_type in self.loaders:
             metadata_path = (
                 self.dir_path
                 / f"{output_type}_cache"
-                / f"{cache_dirs[output_type]}"
+                / f"{dag_roots[output_type].cache_id}"
                 / "_metadata.json"
             )
             if metadata_path.exists():
@@ -404,11 +391,14 @@ class GeneViewer:
     def save_raw(self):
         ### 1. Determine which genes need to be visualized.
 
-        all_gene_locations = {
-            seq_id: [gene_location for gene_location in gene_locations]
-            for loader in self.regions_loaders
-            for seq_id, gene_locations in loader.gene_locations.items()
-        }
+        all_gene_locations = defaultdict(list)
+        genes_seen = set()
+        for loader in self.regions_loaders:
+            for gene_locations in loader.gene_locations.values():
+                for gene_location in gene_locations:
+                    if gene_location.id not in genes_seen:
+                        genes_seen.add(gene_location.id)
+                        all_gene_locations[gene_location.seq_id].append(gene_location)
 
         all_gene_locations_flattened = {}
         for gene_locations in all_gene_locations.values():
@@ -422,12 +412,12 @@ class GeneViewer:
             gene_ids_to_visualize: set[str] = set(self.probes_loader.gene_list)
 
         gene_locations_to_visualize = {
-            seq_id: [gene_location for gene_location in gene_locations]
-            for seq_id, gene_locations in all_gene_locations.items()
-            if any(
-                gene_location.id in gene_ids_to_visualize
+            seq_id: [
+                gene_location
                 for gene_location in gene_locations
-            )
+                if gene_location.id in gene_ids_to_visualize
+            ]
+            for seq_id, gene_locations in all_gene_locations.items()
         }
 
         ### 2. Provide gene locations to loaders that require them.
@@ -477,21 +467,11 @@ class GeneViewer:
 
     # Helpers
 
-    def _get_gene_data(
-        self,
-        gene: GeneLocation,
-        required_inputs: set[str] | None = None,
-        required_processors: set[str] | None = None,
-    ):
+    def _get_gene_data(self, gene: GeneLocation):
         """Retrieves the gene data for a specific gene ID, using only the required inputs and processors"""
         gene_data = {}
-        filtered_inputs = [
-            data_type
-            for data_type in self.loaders
-            if required_inputs is None or data_type in required_inputs
-        ]
 
-        for data_type in filtered_inputs:
+        for data_type in self.loaders:
             if data_type == "sequences":
                 gene_data[data_type] = [
                     item
@@ -513,10 +493,9 @@ class GeneViewer:
                         gene_data[data_type][key].extend(value)
 
         for processor in self.processors:
-            if required_processors is None or processor.id in required_processors:
-                new_gene_data = processor.process(gene_data)
-                for data_type in processor.output:
-                    gene_data[data_type] = new_gene_data[data_type]
+            new_gene_data = processor.process(gene_data)
+            for data_type in processor.output:
+                gene_data[data_type] = new_gene_data[data_type]
 
         return gene_data
 
@@ -525,12 +504,3 @@ class GeneViewer:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         with open(file_path, "w") as f:
             json.dump(data, f, indent=4)
-
-    def _write_zstd_json(self, data, file_path: Path):
-        """Writes data as a zstandard-compressed JSON file."""
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(file_path, "wb") as f:
-            cctx = zstd.ZstdCompressor()
-            compressed = cctx.compress(json.dumps(data).encode("utf-8"))
-            f.write(compressed)
-        

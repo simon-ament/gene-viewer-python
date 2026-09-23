@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import zstandard as zstd
+
 
 class GeneViewerServer:
     def __init__(self, dir_path: str):
@@ -15,9 +17,7 @@ class GeneViewerServer:
                 self.dir_path / "visualizations" / f"{viewer_id}" / "_metadata.json"
             )
             if not gene_list_file_path.exists():
-                return {
-                    "error": f"Viewer with ID {viewer_id} not found"
-                }
+                return {"error": f"Viewer with ID {viewer_id} not found"}
             with open(gene_list_file_path, "r") as f:
                 metadata = json.load(f)
             resolved_gene_id = (
@@ -33,9 +33,7 @@ class GeneViewerServer:
         )
 
         if not gene_data_file_path.exists():
-            return {
-                "error": f"Data for gene {resolved_gene_id} not found"
-            }
+            return {"error": f"Data for gene {resolved_gene_id} not found"}
 
         with open(gene_data_file_path, "r") as f:
             gene_data = json.load(f)
@@ -45,10 +43,19 @@ class GeneViewerServer:
             item = gene_data[data_type]
             if isinstance(item, dict) and "_ref" in item:
                 # check if the reference file exists
-                ref_file_path = self.dir_path / f"{data_type}_cache" / item["_ref"]
-                if ref_file_path.exists():
-                    with open(ref_file_path, "r") as ref_f:
-                        ref_data = json.load(ref_f)
+                ref_dir_path = self.dir_path / f"{data_type}_cache" / item["_ref"]
+                if ref_dir_path.exists():
+                    with open(ref_dir_path / "_index.json", "r") as index_file:
+                        index = json.load(index_file)
+                        gene_info = index.get(resolved_gene_id)
+                        gene_offset = gene_info["offset"]
+                        gene_length = gene_info["length"]
+                    with open(ref_dir_path / "data.blob", "rb") as blob_file:
+                        blob_file.seek(gene_offset)
+                        ref_data = zstd.ZstdDecompressor().decompress(
+                            blob_file.read(gene_length)
+                        )
+                    ref_data = json.loads(ref_data)
                     gene_data[data_type] = ref_data
 
         if not gene_id:

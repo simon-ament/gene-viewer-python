@@ -47,8 +47,10 @@ class ProcessorExonJunctions(Processor):
             merged_exon_junctions = []
             last_exon_junction = sorted_exon_junctions[0]
             for exon_junction in sorted_exon_junctions[1:]:
-                exon_number = exon_junction["exon_number"] # first exon number
-                last_exon_number = last_exon_junction["exon_number"] # second exon number
+                exon_number = exon_junction["exon_number"]  # first exon number
+                last_exon_number = last_exon_junction[
+                    "exon_number"
+                ]  # second exon number
                 if exon_number == last_exon_number:
                     # merge exon junctions with same exon_number
                     last_exon_junction["end"] = max(
@@ -62,7 +64,11 @@ class ProcessorExonJunctions(Processor):
 
             # replace exon junctions with merged exon junctions
             data["regions"][transcript_id] = (
-                list(filter(lambda x: x["type"] != "exonexonjunction", transcript_regions))
+                list(
+                    filter(
+                        lambda x: x["type"] != "exonexonjunction", transcript_regions
+                    )
+                )
                 + merged_exon_junctions
             )
 
@@ -141,10 +147,15 @@ class ProcessorExonSequencesOnly(Processor):
                     sorted_sequences[sequence_idx]["start"]
                     > sorted_exons[exon_idx]["end"]
                     or sorted_exons[exon_idx]["start"]
-                    > sorted_sequences[sequence_idx]["start"] + len(sorted_sequences[sequence_idx]["sequence"]) - 1
+                    > sorted_sequences[sequence_idx]["start"]
+                    + len(sorted_sequences[sequence_idx]["sequence"])
+                    - 1
                 )
             ):
-                if sorted_sequences[sequence_idx]["start"] < sorted_exons[exon_idx]["start"]:
+                if (
+                    sorted_sequences[sequence_idx]["start"]
+                    < sorted_exons[exon_idx]["start"]
+                ):
                     sequence_idx += 1
                 else:
                     exon_idx += 1
@@ -163,13 +174,17 @@ class ProcessorExonSequencesOnly(Processor):
                 exon_end = sorted_exons[exon_idx]["end"]
 
             selection_end = min(
-                sorted_sequences[sequence_idx]["start"] + len(sorted_sequences[sequence_idx]["sequence"]) - 1, exon_end
+                sorted_sequences[sequence_idx]["start"]
+                + len(sorted_sequences[sequence_idx]["sequence"])
+                - 1,
+                exon_end,
             )
-            
+
             # 3. select the sequence from selection_start to selection_end and add it to the sequences list
             if selection_start <= selection_end:
                 sequence = sorted_sequences[sequence_idx]["sequence"][
-                    selection_start - sorted_sequences[sequence_idx]["start"] : selection_end
+                    selection_start
+                    - sorted_sequences[sequence_idx]["start"] : selection_end
                     - sorted_sequences[sequence_idx]["start"]
                     + 1
                 ]

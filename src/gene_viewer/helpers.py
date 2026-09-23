@@ -1,5 +1,4 @@
 import hashlib
-import re
 
 
 def _hash_file(file_path: str, chunk_size: int = 8192) -> str:
@@ -18,7 +17,7 @@ def _parse_GTF_line(line: str) -> dict:
     if len(fields) != 9:
         print(f"Parsing GTF line: {line.strip()}")
         raise ValueError("Invalid GTF line: must have 9 fields.")
-    
+
     return {
         "seqname": fields[0],
         "source": fields[1],
@@ -28,8 +27,9 @@ def _parse_GTF_line(line: str) -> dict:
         "score": fields[5] if fields[5] != "." else None,
         "strand": fields[6] if fields[6] != "." else None,
         "frame": fields[7] if fields[7] != "." else None,
-        "attributes": fields[8] if fields[8] != "." else None
+        "attributes": fields[8] if fields[8] != "." else None,
     }
+
 
 def _get_GTF_attribute(attributes: str, key: str):
     # fast search for the key in the attributes string (not using regex for performance reasons)
@@ -41,4 +41,4 @@ def _get_GTF_attribute(attributes: str, key: str):
     end_index = attributes.find('"', start_index + len(key_pattern))
     if end_index == -1:
         return None
-    return attributes[start_index + len(key_pattern):end_index]
+    return attributes[start_index + len(key_pattern) : end_index]
